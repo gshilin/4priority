@@ -1,8 +1,7 @@
 .idea
 .env
-*/4priority
-*/bb2prio
-*/bb2fix
-*/bbData
-*/ext2prio
-db/
+4priority/4priority
+bb2prio/bb2prio
+bb2fix/bb2fix
+bbData/bbData
+ext2prio/ext2prio
