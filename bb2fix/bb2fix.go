@@ -5,20 +5,19 @@
 package main
 
 import (
-	"log"
-	_ "github.com/jmoiron/sqlx"
-	_ "github.com/pkg/errors"
-	_ "github.com/go-sql-driver/mysql"
-	_ "github.com/joho/godotenv/autoload"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/jmoiron/sqlx"
+	_ "github.com/jmoiron/sqlx"
+	_ "github.com/joho/godotenv/autoload"
+	_ "github.com/pkg/errors"
+	"io/ioutil"
+	"log"
+	"net/http"
 	"os"
 	"strconv"
-	"github.com/jmoiron/sqlx"
-	"database/sql"
-	"encoding/json"
-	"net/http"
-	"bytes"
-	"io/ioutil"
 	"time"
 )
 
@@ -150,8 +149,8 @@ func OpenDb(host string, user string, password string, protocol string, dbName s
 	return
 }
 
-func (database databaseType) closeDb() {
-	database.DB.Close()
+func (db databaseType) closeDb() {
+	_ = db.DB.Close()
 }
 
 func ReadMessages(startFrom int) {
@@ -331,26 +330,26 @@ func (p pelecardType) getPelecardTransaction(id int64) (response pelecardRespons
 	}
 
 	bodyBytes, _ := ioutil.ReadAll(resp.Body)
-	json.Unmarshal(bodyBytes, &response)
+	_ = json.Unmarshal(bodyBytes, &response)
 	resp.Body.Close()
 
 	return
 }
 
-func (database databaseType) fixContribution(id int64, status int64) {
-	database.DB.MustExec(`UPDATE civicrm_contribution SET contribution_status_id = ? WHERE id = ?`, status, id)
+func (db databaseType) fixContribution(id int64, status int64) {
+	db.DB.MustExec(`UPDATE civicrm_contribution SET contribution_status_id = ? WHERE id = ?`, status, id)
 }
 
-func (database databaseType) fixInvoiceNumber(id int64, state string) {
+func (db databaseType) fixInvoiceNumber(id int64, state string) {
 	if state == "" {
-		database.DB.MustExec(`UPDATE civicrm_contribution SET invoice_number = NULL WHERE id = ?`, id)
+		db.DB.MustExec(`UPDATE civicrm_contribution SET invoice_number = NULL WHERE id = ?`, id)
 	} else {
-		database.DB.MustExec(`UPDATE civicrm_contribution SET invoice_number = ? WHERE id = ?`, state, id)
+		db.DB.MustExec(`UPDATE civicrm_contribution SET invoice_number = ? WHERE id = ?`, state, id)
 	}
 }
 
-func (database databaseType) paymentDataExists(id int64) (x bool) {
-	err = database.DB.Get(&x, `
+func (db databaseType) paymentDataExists(id int64) (x bool) {
+	err = db.DB.Get(&x, `
 		SELECT count(1) > 0
 		FROM civicrm_bb_payment_responses
 		WHERE cid = ?
@@ -359,12 +358,12 @@ func (database databaseType) paymentDataExists(id int64) (x bool) {
 	return
 }
 
-func (database databaseType) getContributionIdsIncompleted(status int64, startFromId int) (ids []int64) {
+func (db databaseType) getContributionIdsIncompleted(status int64, startFromId int) (ids []int64) {
 	loc, _ := time.LoadLocation("Asia/Jerusalem")
 	d := time.Duration(30 * time.Minute)
 	t := time.Now().In(loc).Add(-d)
 
-	err = database.DB.Select(&ids, `
+	err = db.DB.Select(&ids, `
 		SELECT id
 		FROM civicrm_contribution
 		WHERE contribution_status_id = ? AND id >= ? AND receive_date < ? AND invoice_number IS NULL
@@ -373,12 +372,12 @@ func (database databaseType) getContributionIdsIncompleted(status int64, startFr
 	return
 }
 
-func (database databaseType) getContributionIdsCompleted(status int64, startFromId int) (ids []int64) {
+func (db databaseType) getContributionIdsCompleted(status int64, startFromId int) (ids []int64) {
 	loc, _ := time.LoadLocation("Asia/Jerusalem")
 	d := time.Duration(30 * time.Minute)
 	t := time.Now().In(loc).Add(-d)
 
-	err = database.DB.Select(&ids, `
+	err = db.DB.Select(&ids, `
 		SELECT id
 		FROM civicrm_contribution
 		WHERE contribution_status_id = ? AND id >= ? AND receive_date < ? AND (invoice_number IS NOT NULL AND invoice_number != '1')
@@ -387,8 +386,8 @@ func (database databaseType) getContributionIdsCompleted(status int64, startFrom
 	return
 }
 
-func (database databaseType) getStatus(statusName string) (status int64) {
-	err = database.DB.Get(&status, `
+func (db databaseType) getStatus(statusName string) (status int64) {
+	err = db.DB.Get(&status, `
 		SELECT value
 		FROM civicrm_option_value
 		WHERE option_group_id = (
@@ -401,19 +400,19 @@ func (database databaseType) getStatus(statusName string) (status int64) {
 	return
 }
 
-func updateReported2prio(stmt *sql.Stmt, id string) {
-	res, err := stmt.Exec(id)
-	if err != nil {
-		log.Fatalf("Update error: %v\n", err)
-	}
-	rowCnt, err := res.RowsAffected()
-	if err != nil {
-		log.Fatalf("Update error: %v\n", err)
-	}
-	if rowCnt != 1 {
-		log.Fatalf("Update error: %d rows were updated instead of 1\n", rowCnt)
-	}
-}
+//func updateReported2prio(stmt *sql.Stmt, id string) {
+//	res, err := stmt.Exec(id)
+//	if err != nil {
+//		log.Fatalf("Update error: %v\n", err)
+//	}
+//	rowCnt, err := res.RowsAffected()
+//	if err != nil {
+//		log.Fatalf("Update error: %v\n", err)
+//	}
+//	if rowCnt != 1 {
+//		log.Fatalf("Update error: %d rows were updated instead of 1\n", rowCnt)
+//	}
+//}
 
 func fck(err error) {
 	if err != nil {

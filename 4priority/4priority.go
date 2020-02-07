@@ -1,23 +1,24 @@
-// Wait for messages from services and write them to database to be used by Priority
+// Wait for messages from services and submit them to Priority
+// https://prioritysoftware.github.io/restapi
 
 package main
 
 import (
-	"database/sql"
+	"bytes"
+	"encoding/json"
+	"encoding/xml"
 	"fmt"
-	"github.com/gorilla/mux"
-	_ "github.com/joho/godotenv/autoload"
-	_ "github.com/denisenkom/go-mssqldb"
-
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"io/ioutil"
-	"encoding/json"
-	"net/url"
-	"time"
 	"strings"
+	"time"
 	"unicode/utf8"
+
+	_ "github.com/denisenkom/go-mssqldb"
+	"github.com/gorilla/mux"
+	_ "github.com/joho/godotenv/autoload"
 )
 
 type Event struct {
@@ -30,7 +31,7 @@ type Event struct {
 	CardNum      string  `json:"cardnum" prio:"QAMO_PAYMENTCOUNT"`
 	CardExp      string  `json:"cardexp" prio:"QAMO_VALIDMONTH"`
 	Amount       float64 `json:"amount" prio:"QAMO_PAYPRICE"`
-	Amount1      float64 `json:"amount1" prio:"QAMO_PAYMENT"`
+	Amount1      float64 `json:"amount1" prio:"QAMO_PRICE"`
 	Currency     string  `json:"currency" prio:"QAMO_CURRNCY"`
 	Installments int64   `json:"installments" prio:"QAMO_PAYCODE"`
 	FirstPay     float64 `json:"firstpay" prio:"QAMO_FIRSTPAY"`
@@ -44,36 +45,53 @@ type Event struct {
 	Phone        string  `json:"phone" prio:"QAMO_CELL"`
 	CreatedAt    string  `json:"created_at" prio:"QAMM_UDATE"`
 	Language     string  `json:"language" prio:"QAMO_LANGUAGE"`
-	Reference    string  `json:"reference" prio:"QAMO_REFERENCE"`
+	Reference    string  `json:"reference" prio:"QAMT_REFERENCE"`
 	Organization string  `json:"organization"`
 	IsVisual     bool    `json:"is_visual"`
 }
+type Request struct {
+	UserName     string  `json:"QAMO_CUSTDES,omitempty"`
+	Participants string  `json:"QAMO_DETAILS,omitempty"`
+	Income       string  `json:"QAMO_PARTNAME,omitempty"`
+	Description  string  `json:"QAMO_PARTDES,omitempty"`
+	CardType     string  `json:"QAMO_PAYMENTCODE,omitempty"`
+	CardNum      string  `json:"QAMO_PAYMENTCOUNT,omitempty"`
+	CardExp      string  `json:"QAMO_VALIDMONTH,omitempty"`
+	Amount       float64 `json:"QAMO_PAYPRICE,omitempty"`
+	Currency     string  `json:"QAMO_CURRNCY,omitempty"`
+	Installments string  `json:"QAMO_PAYCODE,omitempty"`
+	FirstPay     float64 `json:"QAMO_FIRSTPAY,omitempty"`
+	Token        string  `json:"QAMO_CARDNUM,omitempty"`
+	Approval     string  `json:"QAMT_AUTHNUM,omitempty"`
+	Is46         string  `json:"QAMO_VAT,omitempty"`
+	Email        string  `json:"QAMO_EMAIL,omitempty"`
+	Address      string  `json:"QAMO_ADRESS,omitempty"`
+	City         string  `json:"QAMO_CITY,omitempty"`
+	Country      string  `json:"QAMO_FROM,omitempty"`
+	Phone        string  `json:"QAMO_CELL,omitempty"`
+	Language     string  `json:"QAMO_LANGUAGE,omitempty"`
+	Monthly      string  `json:"QAMO_MONTHLY,omitempty"`
+	CreatedAt    string  `json:"QAMM_UDATE,omitempty"`
+	Price        float64 `json:"QAMO_PRICE,omitempty"`
+	Reference    string  `json:"QAMT_REFRENCE,omitempty"`
+}
 
-var (
-	bneiDB, arvutDB, mishDB *sql.DB
-)
-
-const numOfUpdates = 20
+var prioApiUrl = os.Getenv("PRIO_API_URL")
 
 func main() {
-	host := os.Getenv("PRIO_DB_HOST")
-	if host == "" {
-		log.Fatalf("Unable to connect without host\n")
-		os.Exit(2)
-	}
-	username := os.Getenv("PRIO_DB_USER")
+	username := os.Getenv("PRIO_API_USER")
 	if username == "" {
 		log.Fatalf("Unable to connect without username\n")
-		os.Exit(2)
 	}
-	password := os.Getenv("PRIO_DB_PASSWORD")
+	password := os.Getenv("PRIO_API_PASSWORD")
 	if password == "" {
 		log.Fatalf("Unable to connect without password\n")
-		os.Exit(2)
 	}
-
-	bneiDB, arvutDB, mishDB = connect2DBs(host, username, password) // side effect: changes bnei and arvut
-	defer closeDB(bneiDB, arvutDB, mishDB)
+	apiUrl := os.Getenv("PRIO_API_URL")
+	if apiUrl == "" {
+		log.Fatalf("Unable to connect without url\n")
+	}
+	prioApiUrl = strings.Replace(apiUrl, "//", "//"+username+":"+password+"@", 1)
 
 	router := mux.NewRouter()
 	port := os.Getenv("PRIO_PORT")
@@ -85,60 +103,13 @@ func main() {
 	router.HandleFunc("/payment_event", processEvent).Methods("POST")
 
 	fmt.Println("SERVING on port", port)
-	http.ListenAndServe(":"+port, router)
-}
-
-func connect2DBs(host, username, password string) (bneiDB *sql.DB, arvutDB *sql.DB, mishDB *sql.DB) {
-
-	bneiDB = connect2db("ben2", host, username, password)
-	arvutDB = connect2db("arvut2", host, username, password)
-	mishDB = connect2db("mish", host, username, password)
-	return
-}
-
-func connect2db(dbname, host, username, password string) (db *sql.DB) {
-	var err error
-
-	query := url.Values{}
-	query.Add("database", dbname)
-	query.Add("log", "63")
-	query.Add("connection pooling", "0")
-
-	u := &url.URL{
-		Scheme:   "sqlserver",
-		User:     url.UserPassword(username, password),
-		Host:     host,
-		Path:     "PRIORITY_INST",
-		RawQuery: query.Encode(),
-	}
-
-	if db, err = sql.Open("sqlserver", u.String()); err != nil {
-		log.Fatalf("DB connection error: %v\n", err)
-	}
-
-	// really connect to db
-	if err = db.Ping(); err != nil {
-		log.Fatalf("DB real connection error: %v\n", err)
-	}
-
-	db.SetMaxOpenConns(numOfUpdates)
-	db.SetMaxIdleConns(numOfUpdates)
-
-	return
-}
-
-func closeDB(dbs ...*sql.DB) {
-	for _, db := range dbs {
-		db.Close()
-	}
+	_ = http.ListenAndServe(":"+port, router)
 }
 
 func processEvent(w http.ResponseWriter, req *http.Request) {
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
-		message := map[string]interface{}{"error": true, "message": "Error reading request body"}
-		m, _ := json.Marshal(message)
-		http.Error(w, string(m), http.StatusInternalServerError)
+		notify(w, "Error reading request body", http.StatusInternalServerError)
 		return
 	}
 	defer req.Body.Close()
@@ -146,31 +117,22 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 	event := Event{}
 	if err := json.Unmarshal(body, &event); err != nil {
 		fmt.Println(string(body), "\nUnmarshal error:", err)
+		notify(w, fmt.Sprintf("%v", err), http.StatusInternalServerError)
 		return
 	}
 
-	// write response to DB
-	if err != nil {
-		message := map[string]interface{}{"error": true, "message": fmt.Sprintf("%v", err)}
-		m, _ := json.Marshal(message)
-		http.Error(w, string(m), 404)
-		return
-	}
-
-	var db *sql.DB
 	switch event.Organization {
 	case "ben2":
-		db = bneiDB
 	case "arvut2":
-		db = arvutDB
-	case "mish":
-		db = mishDB
+	case "meshp18":
 	default:
 		message := map[string]interface{}{"error": true, "message": fmt.Sprintf("Unknown organization: %s", event.Organization)}
 		m, _ := json.Marshal(message)
-		http.Error(w, string(m), 404)
+		http.Error(w, string(m), http.StatusInternalServerError)
 		return
 	}
+	var url = prioApiUrl + "/" + event.Organization + "/QAMO_LOADINTENET"
+
 	vat := "N"
 	if event.Is46 {
 		vat = "Y"
@@ -185,83 +147,211 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		message := map[string]interface{}{"error": true, "message": fmt.Sprintf("%v", err)}
 		m, _ := json.Marshal(message)
-		http.Error(w, string(m), 404)
+		http.Error(w, string(m), http.StatusInternalServerError)
 		return
 	}
 	createdAt := t.Format("02/01/06 15:04")
-	var convert func(string, bool) string
-	if event.IsVisual {
-		convert = func(str string, flag bool) string {
-			return str
-		}
-	} else {
-		convert = convertDirection4Priority
+	var convert = func(str string, flag bool) string {
+		return str
 	}
-	_, err = db.Exec(
-		`INSERT INTO QAMO_LOADINTENET(
-							 QAMO_CUSTDES,
-							 QAMO_DETAILS,
-							 QAMO_PARTNAME,
-							 QAMO_PARTDES,
-							 QAMO_PAYMENTCODE,
-							 QAMO_PAYMENTCOUNT,
-							 QAMO_VALIDMONTH,
-							 QAMO_PAYPRICE,
-							 QAMO_CURRNCY,
-							 QAMO_PAYCODE,
-							 QAMO_FIRSTPAY,
-							 QAMO_CARDNUM,
-							 QAMT_AUTHNUM,
-							 QAMO_VAT,
-							 QAMO_EMAIL,
-							 QAMO_ADRESS,
-							 QAMO_CITY,
-							 QAMO_FROM,
-							 QAMO_CELL,
-							 QAMO_LANGUAGE,
-							 QAMO_MONTHLY,
-							 QAMM_UDATE,
-							 QAMO_PRICE,
-							 QAMT_REFRENCE
-							 )
-				 VALUES(@p1, @p2, @p3, @p4, @p5, @p6, @p7, @p8, @p9, @p10, @p11, @p12, @p13, @p14, @p15, @p16, @p17, @p18, @p19, @p20, @p21, @p22, @p23, @p24)`,
-		substr(convert(strings.TrimSpace(event.UserName), true), 0, 48),
-		fmt.Sprint(event.Participants),
-		strings.TrimSpace(event.Income),
-		substr(convert(strings.TrimSpace(event.Description), true), 0, 120),
-		event.CardType,
-		event.CardNum,
-		event.CardExp,
-		event.Amount,
-		convert(event.Currency, false),
-		fmt.Sprintf("%02d", event.Installments+7),
-		event.FirstPay,
-		strings.TrimSpace(event.Token),
-		strings.TrimSpace(event.Approval),
-		vat,
-		substr(strings.TrimSpace(event.Email), 0, 40),
-		substr(convert(strings.TrimSpace(event.Address), true), 0, 12),
-		substr(convert(strings.TrimSpace(event.City), true), 0, 22),
-		substr(convert(strings.TrimSpace(event.Country), true), 0, 12),
-		substr(convert(strings.TrimSpace(event.Phone), true), 0, 16),
-		event.Language,
-		monthly,
-		createdAt,
-		event.Amount,
-		event.Reference,
-	)
+
+	var request = Request{
+		UserName:     substr(convert(strings.TrimSpace(event.UserName), true), 0, 48),
+		Participants: fmt.Sprintf("%d", event.Participants),
+		Income:       strings.TrimSpace(event.Income),
+		Description:  substr(convert(strings.TrimSpace(event.Description), true), 0, 120),
+		CardType:     event.CardType,
+		CardNum:      event.CardNum,
+		CardExp:      event.CardExp,
+		Amount:       event.Amount,
+		Currency:     convert(event.Currency, false),
+		Installments: fmt.Sprintf("%02d", event.Installments+7),
+		FirstPay:     event.FirstPay,
+		Token:        strings.TrimSpace(event.Token),
+		Approval:     strings.TrimSpace(event.Approval),
+		Is46:         vat,
+		Email:        substr(strings.TrimSpace(event.Email), 0, 40),
+		Address:      substr(convert(strings.TrimSpace(event.Address), true), 0, 12),
+		City:         substr(convert(strings.TrimSpace(event.City), true), 0, 22),
+		Country:      substr(convert(strings.TrimSpace(event.Country), true), 0, 12),
+		Phone:        substr(convert(strings.TrimSpace(event.Phone), true), 0, 16),
+		Language:     event.Language,
+		Monthly:      monthly,
+		CreatedAt:    createdAt,
+		Price:        event.Amount,
+		Reference:    event.Reference,
+	}
+	params, _ := json.Marshal(request)
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer(params))
 	if err != nil {
-		message := map[string]interface{}{"error": true, "message": fmt.Sprintf("%v", err)}
-		m, _ := json.Marshal(message)
-		http.Error(w, string(m), 404)
+		notify(w, fmt.Sprintf("%v: %s", err, request.Reference), http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("OData-Version", "4.0")
+	req.Header.Set("Content-Type", "application/json;odata.metadata=minimal")
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{Timeout: time.Second * 100}
+	response, err := client.Do(req)
+	if err != nil {
+		notify(w, fmt.Sprintf("%v: %s", err, request.Reference), http.StatusInternalServerError)
+		return
+	}
+	defer response.Body.Close()
+	bodyBytes, _ := ioutil.ReadAll(response.Body)
+	type Inner struct {
+		Message string `json:"message"`
+	}
+	var resp struct {
+		Error struct {
+			Message string
+		}
+		Line int `json:"QAMO_LINE"`
+	}
+	if len(bodyBytes) == 0 {
+		msg := fmt.Sprintf("This line already exists: %s", request.Reference)
+		notify(w, msg, http.StatusInternalServerError)
+		return
+	}
+	err = json.Unmarshal(bodyBytes, &resp)
+	if err != nil {
+		// ERROR
+		//<FORM
+		//  TYPE="QAMO_LOADINTENET">
+		//  <InterfaceErrors>
+		//    <text>.missing מספר בפלאקארד</text>
+		//  </InterfaceErrors>
+		//</FORM>
+		type InterfaceErrors struct {
+			XMLName xml.Name `xml:"InterfaceErrors"`
+			Message string   `xml:"text"`
+		}
+		type Form struct {
+			XMLName xml.Name        `xml:"FORM"`
+			Error   InterfaceErrors `xml:"InterfaceErrors"`
+		}
+		var xmlMessage Form
+		err = xml.Unmarshal(bodyBytes, &xmlMessage)
+		if err != nil {
+			txt := fmt.Sprintf("Unmarshal Error: %v: %s", err, request.Reference)
+			notify(w, txt, http.StatusInternalServerError)
+			return
+		}
+		notify(w, xmlMessage.Error.Message+": "+request.Reference, http.StatusInternalServerError)
+		return
+	}
+	if resp.Error.Message != "" {
+		// GENERIC ERROR
+		//{
+		//	"error":{
+		//	"code":"","message":"An error has occurred."
+		//  }
+		//}
+		notify(w, resp.Error.Message+": "+request.Reference, http.StatusInternalServerError)
 		return
 	}
 
-	lastId := 0
-	//err = db.QueryRow("SELECT SCOPE_IDENTITY() FROM QAMO_LOADINTENET;").Scan(&lastId)
-	// write response
-	message := fmt.Sprintf("{\"error\": false, \"message\": \"Inserted id: %d\"}", lastId)
-	http.Error(w, message, 200)
+	// SUCCESS
+	//{
+	//	"@odata.context":"https://pri.kbb1.com/odata/Priority/tabula.ini/ben2/$metadata#QAMO_LOADINTENET/$entity",
+	//	"QAMT_REFRENCE":"12345","QAMM_UDATE":"21/01/20 05:19","QAMO_CUSTNAME":null,"QAMO_DATE":null,"QAMO_CUSTDES":"Test Test","QAMO_DETAILS":"1","QAMO_BRANCH":null,"QAMO_AGENT":null,"QAMO_PARTNAME":"40002","QAMO_PARTDES":"\u041e\u043d\u043b\u0430\u0439\u043d-\u0432\u0437\u043d\u043e\u0441: Donate once","QAMO_TQAUNT":0,"QAMO_PRICE":7.00,"QAMO_PAYMENTCODE":"CAL","QAMO_PAYMENTCOUNT":"475787******1111","QAMO_VALIDMONTH":"0621","QAMO_PAYPRICE":5.00,"QAMO_CURRNCY":"EUR","QAMO_PAYCODE":"08","QAMO_FIRSTPAY":5.00,"QAMO_CARDNUM":null,"QAMO_VAT":"Y","QAMO_EMAIL":"test@gmail.com","QAMO_ADRESS":null,"QAMO_CITY":null,"QAMO_CELL":"+375293927607","QAMO_FROM":"Belarus","QAMO_LANGUAGE":"EN","QAMO_MONTHLY":"N","QAMT_IVSTATDES":null,"QAMT_AUTHNUM":null,"QAMM_LOAD":null,"QAMM_ERRFLAG":null,"QAMT_CHECK":null,"QAMM_IVNUM":null,"COUNTER_C":null,
+	//	"QAMO_LINE":115520
+	//}
+	message := fmt.Sprintf("{\"error\":false,\"message\":\"Inserted id: %d\"}", resp.Line)
+	logMessage(message, false)
+	http.Error(w, message, http.StatusOK)
+}
+
+func logMessage(message string, sendmail bool) {
+	currentTime := time.Now()
+	m := fmt.Sprintf("%s %s", currentTime.Format("2006-01-02 15:04:05"), message)
+	fmt.Println(m)
+	if sendmail {
+		sendEmail(m)
+	}
+}
+
+func sendEmail(m string) {
+	//	serverName := "pro.turbo-smtp.com:587"
+	//	//host, _, _ := net.SplitHostPort(serverName)
+	//	auth := sasl.NewPlainClient("", "support@kbb1.com", "sE3BM1D2")
+	//	from := "4priority@kbb1.com"
+	//	to   := []string{"alexmizrachi@gmail.com"}
+	//	err := smtp.SendMail(serverName, auth, from, to, []byte(m))
+	//	if err != nil {
+	//		log.Printf("%s SendMail error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//		return
+	//	}
+	//}
+	//return
+	//if sendEmail {
+	//	serverName := "pro.turbo-smtp.com:25"
+	//	//host, _, _ := net.SplitHostPort(serverName)
+	//	auth := sasl.NewPlainClient("", "support@kbb1.com", "sE3BM1D2")
+	//
+	//	//tlsconfig := &tls.Config {
+	//	//	ServerName: host,
+	//	//}
+	//	c, err := smtp.Dial(serverName)
+	//	if err != nil {
+	//		log.Printf("%s Dial error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//		return
+	//	}
+	//	//if err = c.StartTLS(tlsconfig); err != nil {
+	//	//	log.Printf("%s StartTLS error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//	//	return
+	//	//}
+	//	if err = c.Auth(auth); err != nil {
+	//		log.Printf("%s Auth error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//		return
+	//	}
+	//
+	//	from := mail.Address{"4priority server", "4priority@kbb1.com"}
+	//	to := mail.Address{"Alex Mizrachi", "alexmizrachi@gmail.com"}
+	//
+	//	headers := make(map[string]string)
+	//	headers["From"] = from.String()
+	//	headers["To"] = to.String()
+	//	headers["Subject"] = "4priority error"
+	//	message := ""
+	//	for k, v := range headers {
+	//		message += fmt.Sprintf("%s: %s\r\n", k, v)
+	//	}
+	//	message += "\r\n" + m
+	//
+	//	if err = c.Mail(from.Address); err != nil {
+	//		log.Printf("%s Mail error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//		return
+	//	}
+	//	if err = c.Rcpt(to.Address); err != nil {
+	//		log.Printf("%s Rcpt error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//		return
+	//	}
+	//	w, err := c.Data()
+	//	if err != nil {
+	//		log.Printf("%s Data error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//		return
+	//	}
+	//
+	//	_, err = w.Write([]byte(message))
+	//	if err != nil {
+	//		log.Printf("%s Write error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//		return
+	//	}
+	//
+	//	err = w.Close()
+	//	if err != nil {
+	//		log.Printf("%s Close error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
+	//		return
+	//	}
+	//
+	//	_ = c.Quit()
+}
+
+func notify(w http.ResponseWriter, message string, code int) {
+	msg := map[string]interface{}{"error": true, "message": message}
+	m, _ := json.Marshal(msg)
+	logMessage(string(m), true)
+	http.Error(w, string(m), code)
 }
 
 func substr(s string, pos, length int) (result string) {
@@ -287,7 +377,7 @@ func reverse(s string) string {
 }
 
 func convertDirection4Priority(src string, flag bool) string {
-	if (flag) {
+	if flag {
 		src = strings.Replace(src, "\"", "", -1)
 	}
 	src = strings.Replace(src, "[", "", -1)
