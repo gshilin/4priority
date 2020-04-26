@@ -1,11 +1,14 @@
 module github.com/gshilin/4priority
 
-go 1.12
-
 require (
-	github.com/MakeNowJust/heredoc v0.0.0-20171113091838-e9091a26100e // indirect
-	github.com/go-sql-driver/mysql v1.4.1 // indirect
-	github.com/jmoiron/sqlx v1.2.0 // indirect
-	github.com/joho/godotenv v1.3.0 // indirect
-	github.com/pkg/errors v0.8.1 // indirect
+	cloud.google.com/go v0.24.0 // indirect
+	github.com/denisenkom/go-mssqldb v0.0.0-20180620032804-94c9c97e8c9f
+	github.com/emersion/go-sasl v0.0.0-20191210011802-430746ea8b9b
+	github.com/google/go-cmp v0.4.0 // indirect
+	github.com/gorilla/context v1.1.1 // indirect
+	github.com/gorilla/mux v1.6.2
+	github.com/joho/godotenv v1.2.0
+	golang.org/x/crypto v0.0.0-20180621125126-a49355c7e3f8 // indirect
 )
+
+go 1.13
