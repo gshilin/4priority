@@ -48,6 +48,7 @@ type Event struct {
 	Reference    string  `json:"reference" prio:"QAMT_REFERENCE"`
 	Organization string  `json:"organization"`
 	IsVisual     bool    `json:"is_visual"`
+	IsUTC        int64   `json:"is_utc,omitempty"`
 }
 type Request struct {
 	UserName     string  `json:"QAMO_CUSTDES,omitempty"`
@@ -149,6 +150,17 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		m, _ := json.Marshal(message)
 		http.Error(w, string(m), http.StatusInternalServerError)
 		return
+	}
+	if event.IsUTC == 1 {
+		message := fmt.Sprintf("Non-UTC TZ: before %s", t.Format("02/01/06 15:04"))
+		logMessage(message, false)
+		jerusalemTZ, err := time.LoadLocation("Asia/Jerusalem")
+		if err != nil {
+			log.Fatal(`Failed to load location "Local"`)
+		}
+		t = t.In(jerusalemTZ)
+		message = fmt.Sprintf("Non-UTC TZ: after %s", t.Format("02/01/06 15:04"))
+		logMessage(message, false)
 	}
 	createdAt := t.Format("02/01/06 15:04")
 	var convert = func(str string, flag bool) string {
@@ -256,7 +268,7 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 	//	"QAMT_REFRENCE":"12345","QAMM_UDATE":"21/01/20 05:19","QAMO_CUSTNAME":null,"QAMO_DATE":null,"QAMO_CUSTDES":"Test Test","QAMO_DETAILS":"1","QAMO_BRANCH":null,"QAMO_AGENT":null,"QAMO_PARTNAME":"40002","QAMO_PARTDES":"\u041e\u043d\u043b\u0430\u0439\u043d-\u0432\u0437\u043d\u043e\u0441: Donate once","QAMO_TQAUNT":0,"QAMO_PRICE":7.00,"QAMO_PAYMENTCODE":"CAL","QAMO_PAYMENTCOUNT":"475787******1111","QAMO_VALIDMONTH":"0621","QAMO_PAYPRICE":5.00,"QAMO_CURRNCY":"EUR","QAMO_PAYCODE":"08","QAMO_FIRSTPAY":5.00,"QAMO_CARDNUM":null,"QAMO_VAT":"Y","QAMO_EMAIL":"test@gmail.com","QAMO_ADRESS":null,"QAMO_CITY":null,"QAMO_CELL":"+375293927607","QAMO_FROM":"Belarus","QAMO_LANGUAGE":"EN","QAMO_MONTHLY":"N","QAMT_IVSTATDES":null,"QAMT_AUTHNUM":null,"QAMM_LOAD":null,"QAMM_ERRFLAG":null,"QAMT_CHECK":null,"QAMM_IVNUM":null,"COUNTER_C":null,
 	//	"QAMO_LINE":115520
 	//}
-	message := fmt.Sprintf("{\"error\":false,\"message\":\"Inserted id: %d\"}", resp.Line)
+	message := fmt.Sprintf("{\"error\":false,\"message\":\"Inserted id: %d, %s\"}", resp.Line, request.Reference)
 	logMessage(message, false)
 	http.Error(w, message, http.StatusOK)
 }
