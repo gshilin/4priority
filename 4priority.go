@@ -1,10 +1,13 @@
 // Wait for messages from services and submit them to Priority
 // https://prioritysoftware.github.io/restapi
 
+// go build 4priority.go && strip 4priority && upx -9 4priority && cp 4priority /media/sf_projects/bbpriority/
+
 package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -16,8 +19,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	_ "github.com/denisenkom/go-mssqldb"
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
+	"github.com/jmoiron/sqlx"
 	_ "github.com/joho/godotenv/autoload"
 )
 
@@ -77,22 +81,50 @@ type Request struct {
 	Reference    string  `json:"QAMT_REFRENCE,omitempty"`
 }
 
-var prioApiUrl = os.Getenv("PRIO_API_URL")
+var (
+	prioApiUrl = os.Getenv("PRIO_API_URL")
+	db         *sqlx.DB
+	stmt       *sql.Stmt
+	err        error
+)
 
 func main() {
-	username := os.Getenv("PRIO_API_USER")
-	if username == "" {
+	host := os.Getenv("CIVI_HOST")
+	if host == "" {
+		host = "localhost"
+	}
+	dbName := os.Getenv("CIVI_DBNAME")
+	if dbName == "" {
+		dbName = "localhost"
+	}
+	user := os.Getenv("CIVI_USER")
+	if user == "" {
 		log.Fatalf("Unable to connect without username\n")
 	}
-	password := os.Getenv("PRIO_API_PASSWORD")
+	password := os.Getenv("CIVI_PASSWORD")
 	if password == "" {
+		log.Fatalf("Unable to connect without password\n")
+	}
+	protocol := os.Getenv("CIVI_PROTOCOL")
+	if protocol == "" {
+		log.Fatalf("Unable to connect without protocol\n")
+	}
+	db, stmt = OpenDb(host, user, password, protocol, dbName)
+	defer closeDb(db)
+
+	prio_username := os.Getenv("PRIO_API_USER")
+	if prio_username == "" {
+		log.Fatalf("Unable to connect without username\n")
+	}
+	prio_password := os.Getenv("PRIO_API_PASSWORD")
+	if prio_password == "" {
 		log.Fatalf("Unable to connect without password\n")
 	}
 	apiUrl := os.Getenv("PRIO_API_URL")
 	if apiUrl == "" {
 		log.Fatalf("Unable to connect without url\n")
 	}
-	prioApiUrl = strings.Replace(apiUrl, "//", "//"+username+":"+password+"@", 1)
+	prioApiUrl = strings.Replace(apiUrl, "//", "//"+prio_username+":"+prio_password+"@", 1)
 
 	router := mux.NewRouter()
 	port := os.Getenv("PRIO_PORT")
@@ -107,9 +139,37 @@ func main() {
 	_ = http.ListenAndServe(":"+port, router)
 }
 
+// Connect to DB
+func OpenDb(host string, user string, password string, protocol string, dbName string) (db *sqlx.DB, stmt *sql.Stmt) {
+	dsn := fmt.Sprintf("%s:%s@%s(%s)/%s", user, password, protocol, host, dbName)
+	if db, err = sqlx.Open("mysql", dsn); err != nil {
+		log.Fatalf("DB connection error: %v\n", err)
+	}
+	if err = db.Ping(); err != nil {
+		log.Fatalf("DB real connection error: %v\n", err)
+	}
+
+	stmt, err = db.Prepare(
+		"INSERT INTO bb_ext_4priority_log (username, participants, income, description, cardtype, cardnum, cardexp, " +
+			"amount, currency, installments, firstpay, token, approval, is64, email, address, city, country, phone, created_at, " +
+			"language, reference, organization, is_utc) " +
+			"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+	if err != nil {
+		log.Fatalf("Unable to prepare UPDATE statement: %v\n", err)
+	}
+
+	return
+}
+
+func closeDb(db *sqlx.DB) {
+	_ = db.Close()
+}
+
 func processEvent(w http.ResponseWriter, req *http.Request) {
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
+		message := fmt.Sprintf("Error reading request body", http.StatusInternalServerError)
+		logMessage(message)
 		notify(w, "Error reading request body", http.StatusInternalServerError)
 		return
 	}
@@ -117,11 +177,13 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 
 	event := Event{}
 	if err := json.Unmarshal(body, &event); err != nil {
+		message := fmt.Sprintf("Unmarshal error %s body %s", err, string(body))
+		logMessage(message)
 		fmt.Println(string(body), "\nUnmarshal error:", err)
 		notify(w, fmt.Sprintf("%v", err), http.StatusInternalServerError)
 		return
 	}
-
+	registerRequest(event)
 	switch event.Organization {
 	case "ben2":
 	case "arvut2":
@@ -130,6 +192,8 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		message := map[string]interface{}{"error": true, "message": fmt.Sprintf("Unknown organization: %s", event.Organization)}
 		m, _ := json.Marshal(message)
 		http.Error(w, string(m), http.StatusInternalServerError)
+		msg := fmt.Sprintf("Unknown organization <%s> in %s", event.Organization, string(body))
+		logMessage(msg)
 		return
 	}
 	var url = prioApiUrl + "/" + event.Organization + "/QAMO_LOADINTENET"
@@ -149,18 +213,18 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		message := map[string]interface{}{"error": true, "message": fmt.Sprintf("%v", err)}
 		m, _ := json.Marshal(message)
 		http.Error(w, string(m), http.StatusInternalServerError)
+		msg := fmt.Sprintf("Wrong CreatedAt %s in %s", err, string(body))
+		logMessage(msg)
 		return
 	}
 	if event.IsUTC == 1 {
-		message := fmt.Sprintf("Non-UTC TZ: before %s", t.Format("02/01/06 15:04"))
-		logMessage(message, false)
 		jerusalemTZ, err := time.LoadLocation("Asia/Jerusalem")
 		if err != nil {
-			log.Fatal(`Failed to load location "Local"`)
+			msg := fmt.Sprintf("Failed to load location \"Asia/Jerusalem\" %s in %s", err, string(body))
+			logMessage(msg)
+			log.Fatal(`Failed to load location "Asia/Jerusalem"`)
 		}
 		t = t.In(jerusalemTZ)
-		message = fmt.Sprintf("Non-UTC TZ: after %s", t.Format("02/01/06 15:04"))
-		logMessage(message, false)
 	}
 	createdAt := t.Format("02/01/06 15:04")
 	var convert = func(str string, flag bool) string {
@@ -194,8 +258,12 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		Reference:    event.Reference,
 	}
 	params, _ := json.Marshal(request)
+	message := fmt.Sprintf("POST: %s", params)
+	logMessage(message)
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer(params))
 	if err != nil {
+		msg := fmt.Sprintf("POST 1 ERROR %s in %s", err, string(body))
+		logMessage(msg)
 		notify(w, fmt.Sprintf("%v: %s", err, request.Reference), http.StatusInternalServerError)
 		return
 	}
@@ -205,6 +273,8 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 	client := &http.Client{Timeout: time.Second * 100}
 	response, err := client.Do(req)
 	if err != nil {
+		msg := fmt.Sprintf("POST 2 ERROR %s in %s", err, string(body))
+		logMessage(msg)
 		notify(w, fmt.Sprintf("%v: %s", err, request.Reference), http.StatusInternalServerError)
 		return
 	}
@@ -224,6 +294,8 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		notify(w, msg, http.StatusInternalServerError)
 		return
 	}
+	msg := fmt.Sprintf("POST RESPONSE %s", string(bodyBytes))
+	logMessage(msg)
 	err = json.Unmarshal(bodyBytes, &resp)
 	if err != nil {
 		// ERROR
@@ -244,10 +316,14 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		var xmlMessage Form
 		err = xml.Unmarshal(bodyBytes, &xmlMessage)
 		if err != nil {
+			msg := fmt.Sprintf("POST RESPONSE Unmarshal Error %v %s", err, string(bodyBytes))
+			logMessage(msg)
 			txt := fmt.Sprintf("Unmarshal Error: %v: %s", err, request.Reference)
 			notify(w, txt, http.StatusInternalServerError)
 			return
 		}
+		msg := fmt.Sprintf("Error %s", xmlMessage.Error.Message+": "+request.Reference)
+		logMessage(msg)
 		notify(w, xmlMessage.Error.Message+": "+request.Reference, http.StatusInternalServerError)
 		return
 	}
@@ -258,6 +334,8 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		//	"code":"","message":"An error has occurred."
 		//  }
 		//}
+		msg := fmt.Sprintf("Error Generic %s", ": "+request.Reference)
+		logMessage(msg)
 		notify(w, resp.Error.Message+": "+request.Reference, http.StatusInternalServerError)
 		return
 	}
@@ -268,101 +346,21 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 	//	"QAMT_REFRENCE":"12345","QAMM_UDATE":"21/01/20 05:19","QAMO_CUSTNAME":null,"QAMO_DATE":null,"QAMO_CUSTDES":"Test Test","QAMO_DETAILS":"1","QAMO_BRANCH":null,"QAMO_AGENT":null,"QAMO_PARTNAME":"40002","QAMO_PARTDES":"\u041e\u043d\u043b\u0430\u0439\u043d-\u0432\u0437\u043d\u043e\u0441: Donate once","QAMO_TQAUNT":0,"QAMO_PRICE":7.00,"QAMO_PAYMENTCODE":"CAL","QAMO_PAYMENTCOUNT":"475787******1111","QAMO_VALIDMONTH":"0621","QAMO_PAYPRICE":5.00,"QAMO_CURRNCY":"EUR","QAMO_PAYCODE":"08","QAMO_FIRSTPAY":5.00,"QAMO_CARDNUM":null,"QAMO_VAT":"Y","QAMO_EMAIL":"test@gmail.com","QAMO_ADRESS":null,"QAMO_CITY":null,"QAMO_CELL":"+375293927607","QAMO_FROM":"Belarus","QAMO_LANGUAGE":"EN","QAMO_MONTHLY":"N","QAMT_IVSTATDES":null,"QAMT_AUTHNUM":null,"QAMM_LOAD":null,"QAMM_ERRFLAG":null,"QAMT_CHECK":null,"QAMM_IVNUM":null,"COUNTER_C":null,
 	//	"QAMO_LINE":115520
 	//}
-	message := fmt.Sprintf("{\"error\":false,\"message\":\"Inserted id: %d, %s\"}", resp.Line, request.Reference)
-	logMessage(message, false)
+	message = fmt.Sprintf("{\"error\":false,\"message\":\"Inserted id: %d, reference: %s\"}", resp.Line, request.Reference)
+	logMessage(message)
 	http.Error(w, message, http.StatusOK)
 }
 
-func logMessage(message string, sendmail bool) {
+func logMessage(message string) {
 	currentTime := time.Now()
 	m := fmt.Sprintf("%s %s", currentTime.Format("2006-01-02 15:04:05"), message)
 	fmt.Println(m)
-	if sendmail {
-		sendEmail(m)
-	}
-}
-
-func sendEmail(m string) {
-	//	serverName := "pro.turbo-smtp.com:587"
-	//	//host, _, _ := net.SplitHostPort(serverName)
-	//	auth := sasl.NewPlainClient("", "support@kbb1.com", "sE3BM1D2")
-	//	from := "4priority@kbb1.com"
-	//	to   := []string{"alexmizrachi@gmail.com"}
-	//	err := smtp.SendMail(serverName, auth, from, to, []byte(m))
-	//	if err != nil {
-	//		log.Printf("%s SendMail error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//		return
-	//	}
-	//}
-	//return
-	//if sendEmail {
-	//	serverName := "pro.turbo-smtp.com:25"
-	//	//host, _, _ := net.SplitHostPort(serverName)
-	//	auth := sasl.NewPlainClient("", "support@kbb1.com", "sE3BM1D2")
-	//
-	//	//tlsconfig := &tls.Config {
-	//	//	ServerName: host,
-	//	//}
-	//	c, err := smtp.Dial(serverName)
-	//	if err != nil {
-	//		log.Printf("%s Dial error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//		return
-	//	}
-	//	//if err = c.StartTLS(tlsconfig); err != nil {
-	//	//	log.Printf("%s StartTLS error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//	//	return
-	//	//}
-	//	if err = c.Auth(auth); err != nil {
-	//		log.Printf("%s Auth error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//		return
-	//	}
-	//
-	//	from := mail.Address{"4priority server", "4priority@kbb1.com"}
-	//	to := mail.Address{"Alex Mizrachi", "alexmizrachi@gmail.com"}
-	//
-	//	headers := make(map[string]string)
-	//	headers["From"] = from.String()
-	//	headers["To"] = to.String()
-	//	headers["Subject"] = "4priority error"
-	//	message := ""
-	//	for k, v := range headers {
-	//		message += fmt.Sprintf("%s: %s\r\n", k, v)
-	//	}
-	//	message += "\r\n" + m
-	//
-	//	if err = c.Mail(from.Address); err != nil {
-	//		log.Printf("%s Mail error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//		return
-	//	}
-	//	if err = c.Rcpt(to.Address); err != nil {
-	//		log.Printf("%s Rcpt error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//		return
-	//	}
-	//	w, err := c.Data()
-	//	if err != nil {
-	//		log.Printf("%s Data error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//		return
-	//	}
-	//
-	//	_, err = w.Write([]byte(message))
-	//	if err != nil {
-	//		log.Printf("%s Write error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//		return
-	//	}
-	//
-	//	err = w.Close()
-	//	if err != nil {
-	//		log.Printf("%s Close error: %s", currentTime.Format("2006-01-02 15:04:05"), err)
-	//		return
-	//	}
-	//
-	//	_ = c.Quit()
 }
 
 func notify(w http.ResponseWriter, message string, code int) {
 	msg := map[string]interface{}{"error": true, "message": message}
 	m, _ := json.Marshal(msg)
-	logMessage(string(m), true)
+	logMessage(string(m))
 	http.Error(w, string(m), code)
 }
 
@@ -420,4 +418,15 @@ func convertDirection4Priority(src string, flag bool) string {
 	}
 
 	return strings.Join(target, " ")
+}
+
+func registerRequest(event Event) {
+	is64 := 0
+	if event.Is46 {
+		is64 = 1
+	}
+	stmt.Exec(event.UserName, event.Participants, event.Income, event.Description, event.CardType, event.CardNum, event.CardExp,
+		event.Amount, event.Currency, event.Installments, event.FirstPay, event.Token, event.Approval, is64,
+		event.Email, event.Address, event.City, event.Country, event.Phone, event.CreatedAt,
+		event.Language, event.Reference, event.Organization, event.IsUTC)
 }
