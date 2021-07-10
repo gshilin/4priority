@@ -6,8 +6,8 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -82,7 +82,8 @@ type Request struct {
 }
 
 var (
-	prioApiUrl = os.Getenv("PRIO_API_URL")
+	prioApiUrl string
+	authHeader string
 	db         *sqlx.DB
 	stmt       *sql.Stmt
 	err        error
@@ -112,19 +113,20 @@ func main() {
 	db, stmt = OpenDb(host, user, password, protocol, dbName)
 	defer closeDb(db)
 
-	prio_username := os.Getenv("PRIO_API_USER")
-	if prio_username == "" {
+	prioUsername := os.Getenv("PRIO_API_USER")
+	if prioUsername == "" {
 		log.Fatalf("Unable to connect without username\n")
 	}
-	prio_password := os.Getenv("PRIO_API_PASSWORD")
-	if prio_password == "" {
+	prioPassword := os.Getenv("PRIO_API_PASSWORD")
+	if prioPassword == "" {
 		log.Fatalf("Unable to connect without password\n")
 	}
-	apiUrl := os.Getenv("PRIO_API_URL")
-	if apiUrl == "" {
+	prioApiUrl = os.Getenv("PRIO_API_URL")
+	if prioApiUrl == "" {
 		log.Fatalf("Unable to connect without url\n")
 	}
-	prioApiUrl = strings.Replace(apiUrl, "//", "//"+prio_username+":"+prio_password+"@", 1)
+	data := prioUsername + ":" + prioPassword
+	authHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(data))
 
 	router := mux.NewRouter()
 	port := os.Getenv("PRIO_PORT")
@@ -139,7 +141,7 @@ func main() {
 	_ = http.ListenAndServe(":"+port, router)
 }
 
-// Connect to DB
+// OpenDb Connect to DB
 func OpenDb(host string, user string, password string, protocol string, dbName string) (db *sqlx.DB, stmt *sql.Stmt) {
 	dsn := fmt.Sprintf("%s:%s@%s(%s)/%s", user, password, protocol, host, dbName)
 	if db, err = sqlx.Open("mysql", dsn); err != nil {
@@ -183,6 +185,10 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		notify(w, fmt.Sprintf("%v", err), http.StatusInternalServerError)
 		return
 	}
+	x, _ := json.Marshal(event)
+	logMessage(">>> REQUEST")
+	logMessage(string(x))
+	logMessage("<<< REQUEST")
 	registerRequest(event)
 	switch event.Organization {
 	case "ben2":
@@ -196,7 +202,6 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		logMessage(msg)
 		return
 	}
-	var url = prioApiUrl + "/" + event.Organization + "/QAMO_LOADINTENET"
 
 	vat := "N"
 	if event.Is46 {
@@ -260,7 +265,10 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 	params, _ := json.Marshal(request)
 	message := fmt.Sprintf("POST: %s", params)
 	logMessage(message)
-	req, err = http.NewRequest("POST", url, bytes.NewBuffer(params))
+
+	client := &http.Client{Timeout: time.Second * 100}
+	var url = prioApiUrl + event.Organization + "/QAMO_LOADINTENET"
+	req, err = http.NewRequest("POST", url, strings.NewReader(string(params)))
 	if err != nil {
 		msg := fmt.Sprintf("POST 1 ERROR %s in %s", err, string(body))
 		logMessage(msg)
@@ -270,7 +278,7 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 	req.Header.Set("OData-Version", "4.0")
 	req.Header.Set("Content-Type", "application/json;odata.metadata=minimal")
 	req.Header.Set("Accept", "application/json")
-	client := &http.Client{Timeout: time.Second * 100}
+	req.Header.Set("Authorization", authHeader)
 	response, err := client.Do(req)
 	if err != nil {
 		msg := fmt.Sprintf("POST 2 ERROR %s in %s", err, string(body))
@@ -280,22 +288,22 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 	}
 	defer response.Body.Close()
 	bodyBytes, _ := ioutil.ReadAll(response.Body)
-	type Inner struct {
-		Message string `json:"message"`
+	if len(bodyBytes) == 0 {
+		logMessage("POST " + url)
+		msg := fmt.Sprintf("POST RESPONSE (zero length answer)\n\tRequest %#v\nResponse %#v", req, response)
+		logMessage(msg)
+		msg = fmt.Sprintf("BAD RESPONSE ON %s: %s", request.Reference, response.Status)
+		notify(w, msg, response.StatusCode)
+		return
 	}
+	msg := fmt.Sprintf("POST RESPONSE %s", string(bodyBytes))
+	logMessage(msg)
 	var resp struct {
 		Error struct {
 			Message string
 		}
 		Line int `json:"QAMO_LINE"`
 	}
-	if len(bodyBytes) == 0 {
-		msg := fmt.Sprintf("This line already exists: %s", request.Reference)
-		notify(w, msg, http.StatusInternalServerError)
-		return
-	}
-	msg := fmt.Sprintf("POST RESPONSE %s", string(bodyBytes))
-	logMessage(msg)
 	err = json.Unmarshal(bodyBytes, &resp)
 	if err != nil {
 		// ERROR
