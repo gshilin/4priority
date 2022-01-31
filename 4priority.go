@@ -26,33 +26,34 @@ import (
 )
 
 type Event struct {
-	ID           string  `json:"id"`
-	UserName     string  `json:"name" prio:"QAMO_CUSTDES"`
-	Participants int64   `json:"participants" prio:"QAMO_DETAILS"`
-	Income       string  `json:"income" prio:"QAMO_PARTNAME"`
-	Description  string  `json:"event" prio:"QAMO_PARTDES"`
-	CardType     string  `json:"cardtype" prio:"QAMO_PAYMENTCODE"`
-	CardNum      string  `json:"cardnum" prio:"QAMO_PAYMENTCOUNT"`
-	CardExp      string  `json:"cardexp" prio:"QAMO_VALIDMONTH"`
-	Amount       float64 `json:"amount" prio:"QAMO_PAYPRICE"`
-	Amount1      float64 `json:"amount1" prio:"QAMO_PRICE"`
-	Currency     string  `json:"currency" prio:"QAMO_CURRNCY"`
-	Installments int64   `json:"installments" prio:"QAMO_PAYCODE"`
-	FirstPay     float64 `json:"firstpay" prio:"QAMO_FIRSTPAY"`
-	Token        string  `json:"token" prio:"QAMO_CARDNUM"`
-	Approval     string  `json:"approval" db:"QAMT_AUTHNUM"`
-	Is46         bool    `json:"is46" prio:"QAMO_VAT"`
-	Email        string  `json:"email" prio:"QAMO_EMAIL"`
-	Address      string  `json:"address" prio:"QAMO_ADRESS"`
-	City         string  `json:"city" prio:"QAMO_CITY"`
-	Country      string  `json:"country" prio:"QAMO_FROM"`
-	Phone        string  `json:"phone" prio:"QAMO_CELL"`
-	CreatedAt    string  `json:"created_at" prio:"QAMM_UDATE"`
-	Language     string  `json:"language" prio:"QAMO_LANGUAGE"`
-	Reference    string  `json:"reference" prio:"QAMT_REFERENCE"`
-	Organization string  `json:"organization"`
-	IsVisual     bool    `json:"is_visual"`
-	IsUTC        int64   `json:"is_utc,omitempty"`
+	ID            string  `json:"id"`
+	UserName      string  `json:"name" prio:"QAMO_CUSTDES"`
+	Participants  int64   `json:"participants" prio:"QAMO_DETAILS"`
+	Income        string  `json:"income" prio:"QAMO_PARTNAME"`
+	Description   string  `json:"event" prio:"QAMO_PARTDES"`
+	CardType      string  `json:"cardtype" prio:"QAMO_PAYMENTCODE"`
+	CardNum       string  `json:"cardnum" prio:"QAMO_PAYMENTCOUNT"`
+	CardExp       string  `json:"cardexp" prio:"QAMO_VALIDMONTH"`
+	Amount        float64 `json:"amount" prio:"QAMO_PAYPRICE"`
+	Amount1       float64 `json:"amount1" prio:"QAMO_PRICE"`
+	Currency      string  `json:"currency" prio:"QAMO_CURRNCY"`
+	Installments  int64   `json:"installments" prio:"QAMO_PAYCODE"`
+	FirstPay      float64 `json:"firstpay" prio:"QAMO_FIRSTPAY"`
+	Token         string  `json:"token" prio:"QAMO_CARDNUM"`
+	Approval      string  `json:"approval" db:"QAMT_AUTHNUM"`
+	Is46          bool    `json:"is46" prio:"QAMO_VAT"`
+	Email         string  `json:"email" prio:"QAMO_EMAIL"`
+	Address       string  `json:"address" prio:"QAMO_ADRESS"`
+	City          string  `json:"city" prio:"QAMO_CITY"`
+	Country       string  `json:"country" prio:"QAMO_FROM"`
+	Phone         string  `json:"phone" prio:"QAMO_CELL"`
+	CreatedAt     string  `json:"created_at" prio:"QAMM_UDATE"`
+	Language      string  `json:"language" prio:"QAMO_LANGUAGE"`
+	Reference     string  `json:"reference" prio:"QAMT_REFERENCE"`
+	Organization  string  `json:"organization"`
+	IsVisual      bool    `json:"is_visual"`
+	IsUTC         int64   `json:"is_utc,omitempty"`
+	TransactionId string  `json:"transaction_id,omitempty"`
 }
 type Request struct {
 	UserName     string  `json:"QAMO_CUSTDES,omitempty"`
@@ -79,6 +80,35 @@ type Request struct {
 	CreatedAt    string  `json:"QAMM_UDATE,omitempty"`
 	Price        float64 `json:"QAMO_PRICE,omitempty"`
 	Reference    string  `json:"QAMT_REFRENCE,omitempty"`
+}
+type GetTransactionRequest struct {
+	Organization string `json:"organization"`
+	CreatedAt    string `json:"created_at"`
+	Approval     string `json:"approval"`
+}
+type GetTransactionResponse struct {
+	ParamX                   string `json:"AdditionalDetailsParamX"`
+	BroadcastDate            string `json:"BroadcastDate"`
+	BroadcastNo              string `json:"BroadcastNo"`
+	CreateDate               string `json:"CreateDate"`
+	CreditCardAbroadCard     string `json:"CreditCardAbroadCard"`
+	CreditCardCompanyClearer string `json:"CreditCardCompanyClearer"`
+	CardType                 string `json:"CreditCardCompanyIssuer"`
+	CardNum                  string `json:"CreditCardNumber"`
+	CardExp                  string `json:"CreditCardExpDate"`
+	DebitApproveNumber       string `json:"DebitApproveNumber"`
+	DebitCode                string `json:"DebitCode"`
+	DebitCurrency            string `json:"DebitCurrency"`
+	Amount                   string `json:"DebitTotal"`
+	DebitType                string `json:"DebitType"`
+	FirstPay                 string `json:"FirstPaymentTotal"`
+	FixedPaymentTotal        string `json:"FixedPaymentTotal"`
+	JParam                   string `json:"JParam"`
+	TrxnId                   string `json:"PelecardTransactionId"`
+	ShvaFileNumber           string `json:"ShvaFileNumber"`
+	ShvaResult               string `json:"ShvaResult"`
+	Installments             string `json:"TotalPayments"`
+	VoucherId                string `json:"VoucherId"`
 }
 
 var (
@@ -136,6 +166,7 @@ func main() {
 
 	// We handle only one request for now...
 	router.HandleFunc("/payment_event", processEvent).Methods("POST")
+	router.HandleFunc("/payment_event_shopify", processEventShopify).Methods("POST")
 
 	fmt.Println("SERVING on port", port)
 	_ = http.ListenAndServe(":"+port, router)
@@ -167,28 +198,109 @@ func closeDb(db *sqlx.DB) {
 	_ = db.Close()
 }
 
-func processEvent(w http.ResponseWriter, req *http.Request) {
-	body, err := ioutil.ReadAll(req.Body)
+func getTransaction(event Event, body []byte, w http.ResponseWriter) (*GetTransactionResponse, error) {
+	var request = GetTransactionRequest{
+		Organization: event.Organization,
+		CreatedAt:    event.CreatedAt,
+		Approval:     event.Approval,
+	}
+	params, _ := json.Marshal(request)
+
+	client := &http.Client{Timeout: time.Second * 100}
+	var url = "https://checkout.kbb1.com/payments/transaction"
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(params)))
 	if err != nil {
-		message := fmt.Sprintf("Error reading request body", http.StatusInternalServerError)
+		msg := fmt.Sprintf("POST 1 ERROR %s in %s", err, string(body))
+		logMessage(msg)
+		notify(w, fmt.Sprintf("%v: %s", err, request.Approval), http.StatusInternalServerError)
+		return nil, err
+	}
+	response, err := client.Do(req)
+	if err != nil {
+		msg := fmt.Sprintf("POST 2 ERROR %s in %s", err, string(body))
+		logMessage(msg)
+		notify(w, fmt.Sprintf("%v: %s", err, request.Approval), http.StatusInternalServerError)
+		return nil, err
+	}
+	defer response.Body.Close()
+	bodyBytes, _ := ioutil.ReadAll(response.Body)
+	if len(bodyBytes) == 0 {
+		logMessage("POST " + url)
+		msg := fmt.Sprintf("POST RESPONSE (zero length answer)\n\tRequest %#v\nResponse %#v", req, response)
+		logMessage(msg)
+		msg = fmt.Sprintf("BAD RESPONSE ON %s: %s", request.Approval, response.Status)
+		notify(w, msg, response.StatusCode)
+		return nil, err
+	}
+	logMessage(fmt.Sprintf("====> GetTransaction POST RESPONSE ====> %v", string(bodyBytes)))
+	var resp GetTransactionResponse
+	err = json.Unmarshal(bodyBytes, &resp)
+	if err != nil {
+		if err != nil {
+			msg := fmt.Sprintf("POST RESPONSE Unmarshal Error %v %s", err, string(bodyBytes))
+			logMessage(msg)
+			txt := fmt.Sprintf("Unmarshal Error: %v: %s", err, request.Approval)
+			notify(w, txt, http.StatusInternalServerError)
+			return nil, err
+		}
+	}
+
+	return &resp, nil
+}
+
+func processEventShopify(w http.ResponseWriter, req *http.Request) {
+	logMessage("-----> processEventShopify")
+	body, event, err := getEvent(w, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusOK)
+		return
+	}
+	// Shopify doesn't have ParamX, let's first fetch it...
+	trans, err := getTransaction(event, body, w)
+	if err != nil {
+		logMessage(fmt.Sprintf("-----> after getTransaction err=%v", err))
+		http.Error(w, err.Error(), http.StatusOK)
+		return
+	}
+	event.CardType = "CAL"
+	event.CardNum = trans.CardNum
+	event.CardExp = trans.CardExp
+	event.Reference = trans.ParamX
+	eventProcessing(body, event, w)
+}
+
+func processEvent(w http.ResponseWriter, req *http.Request) {
+	body, event, err := getEvent(w, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusOK)
+		return
+	}
+	eventProcessing(body, event, w)
+}
+
+func getEvent(w http.ResponseWriter, req *http.Request) (body []byte, event Event, err error) {
+	body, err = ioutil.ReadAll(req.Body)
+	if err != nil {
+		message := fmt.Sprintf("Error reading request body: %v", err)
 		logMessage(message)
 		notify(w, "Error reading request body", http.StatusInternalServerError)
 		return
 	}
+	logMessage(fmt.Sprintf("REQUEST BODY: %s", body))
 	defer req.Body.Close()
 
-	event := Event{}
-	if err := json.Unmarshal(body, &event); err != nil {
+	if err = json.Unmarshal(body, &event); err != nil {
 		message := fmt.Sprintf("Unmarshal error %s body %s", err, string(body))
 		logMessage(message)
 		fmt.Println(string(body), "\nUnmarshal error:", err)
 		notify(w, fmt.Sprintf("%v", err), http.StatusInternalServerError)
 		return
 	}
-	x, _ := json.Marshal(event)
-	logMessage(">>> REQUEST")
-	logMessage(string(x))
-	logMessage("<<< REQUEST")
+
+	return
+}
+
+func eventProcessing(body []byte, event Event, w http.ResponseWriter) {
 	registerRequest(event)
 	switch event.Organization {
 	case "ben2":
@@ -268,7 +380,7 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 
 	client := &http.Client{Timeout: time.Second * 100}
 	var url = prioApiUrl + event.Organization + "/QAMO_LOADINTENET"
-	req, err = http.NewRequest("POST", url, strings.NewReader(string(params)))
+	req, err := http.NewRequest("POST", url, strings.NewReader(string(params)))
 	if err != nil {
 		msg := fmt.Sprintf("POST 1 ERROR %s in %s", err, string(body))
 		logMessage(msg)
@@ -302,7 +414,7 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		Error struct {
 			Message string
 		}
-		Line int `json:"QAMO_LINE"`
+		Line int `json:"QAMO_LINE,omitempty"`
 	}
 	err = json.Unmarshal(bodyBytes, &resp)
 	if err != nil {
@@ -342,9 +454,9 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		//	"code":"","message":"An error has occurred."
 		//  }
 		//}
-		msg := fmt.Sprintf("Error Generic %s", ": "+request.Reference)
+		msg := fmt.Sprintf("Error %s", ": "+request.Reference)
 		logMessage(msg)
-		notify(w, resp.Error.Message+": "+request.Reference, http.StatusInternalServerError)
+		notify(w, resp.Error.Message+": "+request.Reference, http.StatusBadRequest)
 		return
 	}
 
@@ -386,54 +498,54 @@ func substr(s string, pos, length int) (result string) {
 	return
 }
 
-func reverse(s string) string {
-	chars := []rune(s)
-	for i, j := 0, len(chars)-1; i < j; i, j = i+1, j-1 {
-		chars[i], chars[j] = chars[j], chars[i]
-	}
-	return string(chars)
-}
+//func reverse(s string) string {
+//	chars := []rune(s)
+//	for i, j := 0, len(chars)-1; i < j; i, j = i+1, j-1 {
+//		chars[i], chars[j] = chars[j], chars[i]
+//	}
+//	return string(chars)
+//}
 
-func convertDirection4Priority(src string, flag bool) string {
-	if flag {
-		src = strings.Replace(src, "\"", "", -1)
-	}
-	src = strings.Replace(src, "[", "", -1)
-	src = strings.Replace(src, "]", "", -1)
-	src = strings.Replace(src, "'", "", -1)
-	src = strings.Replace(src, "(", "", -1)
-	src = strings.Replace(src, ")", "", -1)
-	if len(src) <= 1 || !strings.Contains("אבגדהוזחטיכלמנסעפצקרשתםןץףך", src[:1]) {
-		return src
-	}
-	var target []string
-	arr := strings.Fields(src)
-	for i := len(arr) - 1; i >= 0; i-- {
-		e := arr[i]
-		r := []rune(e)[0]
-		if strings.ContainsRune("אבגדהוזחטיכלמנסעפצקרשתםןץףך", r) { // Do not convert words without Hebrew chars
-			//if r == '(' || r == ')' {
-			//	e = strings.Replace(e, "(", "左", -1)
-			//	e = strings.Replace(e, ")", "权", -1)
-			//	e = reverse(e)
-			//	e = strings.Replace(e, "权", ")", -1)
-			//	e = strings.Replace(e, "左", "(", -1)
-			//} else {
-			e = reverse(e)
-			//}
-		}
-		target = append(target, e)
-	}
-
-	return strings.Join(target, " ")
-}
+//func convertDirection4Priority(src string, flag bool) string {
+//	if flag {
+//		src = strings.Replace(src, "\"", "", -1)
+//	}
+//	src = strings.Replace(src, "[", "", -1)
+//	src = strings.Replace(src, "]", "", -1)
+//	src = strings.Replace(src, "'", "", -1)
+//	src = strings.Replace(src, "(", "", -1)
+//	src = strings.Replace(src, ")", "", -1)
+//	if len(src) <= 1 || !strings.Contains("אבגדהוזחטיכלמנסעפצקרשתםןץףך", src[:1]) {
+//		return src
+//	}
+//	var target []string
+//	arr := strings.Fields(src)
+//	for i := len(arr) - 1; i >= 0; i-- {
+//		e := arr[i]
+//		r := []rune(e)[0]
+//		if strings.ContainsRune("אבגדהוזחטיכלמנסעפצקרשתםןץףך", r) { // Do not convert words without Hebrew chars
+//			//if r == '(' || r == ')' {
+//			//	e = strings.Replace(e, "(", "左", -1)
+//			//	e = strings.Replace(e, ")", "权", -1)
+//			//	e = reverse(e)
+//			//	e = strings.Replace(e, "权", ")", -1)
+//			//	e = strings.Replace(e, "左", "(", -1)
+//			//} else {
+//			e = reverse(e)
+//			//}
+//		}
+//		target = append(target, e)
+//	}
+//
+//	return strings.Join(target, " ")
+//}
 
 func registerRequest(event Event) {
 	is64 := 0
 	if event.Is46 {
 		is64 = 1
 	}
-	stmt.Exec(event.UserName, event.Participants, event.Income, event.Description, event.CardType, event.CardNum, event.CardExp,
+	_, _ = stmt.Exec(event.UserName, event.Participants, event.Income, event.Description, event.CardType, event.CardNum, event.CardExp,
 		event.Amount, event.Currency, event.Installments, event.FirstPay, event.Token, event.Approval, is64,
 		event.Email, event.Address, event.City, event.Country, event.Phone, event.CreatedAt,
 		event.Language, event.Reference, event.Organization, event.IsUTC)
