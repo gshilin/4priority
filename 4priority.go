@@ -110,6 +110,75 @@ type GetTransactionResponse struct {
 	Installments             string `json:"TotalPayments"`
 	VoucherId                string `json:"VoucherId"`
 }
+type PriceSet struct {
+	ShopMoney struct {
+		Amount       string `json:"amount"`
+		CurrencyCode string `json:"currency_code"`
+	} `json:"shop_money"`
+	PresentmentMoney struct {
+		Amount       string `json:"amount"`
+		CurrencyCode string `json:"currency_code"`
+	} `json:"presentment_money"`
+}
+
+type ShippingLine struct {
+	ID                            int      `json:"id"`
+	CarrierIdentifier             string   `json:"carrier_identifier"`
+	Code                          string   `json:"code"`
+	DeliveryCategory              *string  `json:"delivery_category,omitempty"`
+	DiscountedPrice               string   `json:"discounted_price"`
+	DiscountedPriceSet            PriceSet `json:"discounted_price_set"`
+	Phone                         *string  `json:"phone,omitempty"`
+	Price                         string   `json:"price"`
+	PriceSet                      PriceSet `json:"price_set"`
+	RequestedFulfillmentServiceId *string  `json:"requested_fulfillment_service_id,omitempty"`
+	Source                        string   `json:"source"`
+	Title                         string   `json:"title"`
+	TaxLines                      []string `json:"tax_lines,omitempty"`
+	DiscountAllocations           []string `json:"discount_allocations,omitempty"`
+}
+type Address struct {
+	FirstName    string  `json:"first_name"`
+	LastName     string  `json:"last_name"`
+	Name         string  `json:"name"`
+	Address1     string  `json:"address1"`
+	Address2     string  `json:"address2"`
+	Phone        string  `json:"phone"`
+	City         string  `json:"city"`
+	ZIP          string  `json:"zip"`
+	Province     *string `json:"province,omitempty"`
+	ProvinceCode *string `json:"province_code,omitempty"`
+	Country      string  `json:"country"`
+	CountryCode  string  `json:"country_code"`
+	Company      *string `json:"company,omitempty"`
+	Latitude     *string `json:"latitude,omitempty"`
+	Longitude    *string `json:"longitude,omitempty"`
+}
+type DeliveryObject struct {
+	SKU                 string         `json:"sku"`
+	Note                string         `json:"note"`
+	Phone               *string        `json:"phone,omitempty"`
+	Price               string         `json:"price"`
+	Title               string         `json:"title"`
+	Vendor              string         `json:"vendor"`
+	Quantity            int            `json:"quantity"`
+	TotalPrice          string         `json:"total_price"`
+	OrderNumber         int            `json:"order_number"`
+	ContactEmail        string         `json:"contact_email"`
+	VariantTitle        string         `json:"variant_title"`
+	ShippingLines       []ShippingLine `json:"shipping_lines"`
+	BillingAddress      Address        `json:"billing_address"`
+	TotalDiscounts      string         `json:"total_discounts"`
+	ShippingAddress     *string        `json:"shipping_address,omitempty"`
+	DiscountAllocations []struct {
+		Amount                   string   `json:"amount"`
+		AmountSet                PriceSet `json:"amount_set"`
+		DiscountApplicationIndex int      `json:"discount_application_index"`
+	} `json:"discount_allocations"`
+}
+type Delivery struct {
+	Object []DeliveryObject `json:"object"`
+}
 
 var (
 	prioApiUrl string
@@ -159,15 +228,16 @@ func main() {
 	authHeader = "Basic " + base64.StdEncoding.EncodeToString([]byte(data))
 
 	router := mux.NewRouter()
-	port := os.Getenv("PRIO_PORT")
-	if port == "" {
-		port = "8080"
-	}
 
 	// We handle only one request for now...
 	router.HandleFunc("/payment_event", processEvent).Methods("POST")
 	router.HandleFunc("/payment_event_shopify", processEventShopify).Methods("POST")
+	router.HandleFunc("/create_delivery_doc", createDeliveryDoc).Methods("POST")
 
+	port := os.Getenv("PRIO_PORT")
+	if port == "" {
+		port = "8080"
+	}
 	fmt.Println("SERVING on port", port)
 	_ = http.ListenAndServe(":"+port, router)
 }
@@ -248,6 +318,20 @@ func getTransaction(event Event, body []byte, w http.ResponseWriter) (*GetTransa
 	return &resp, nil
 }
 
+func createDeliveryDoc(w http.ResponseWriter, req *http.Request) {
+	logMessage("-----> createDeliveryDoc")
+	delivery, err := getDelivery(w, req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusOK)
+		return
+	}
+	if len(delivery) != 1 {
+		http.Error(w, fmt.Errorf("delivery JSON must have exactly one element").Error(), http.StatusOK)
+		return
+	}
+	deliveryDocProcessing(delivery[0], w)
+}
+
 func processEventShopify(w http.ResponseWriter, req *http.Request) {
 	logMessage("-----> processEventShopify")
 	body, event, err := getEvent(w, req)
@@ -298,6 +382,33 @@ func getEvent(w http.ResponseWriter, req *http.Request) (body []byte, event Even
 	}
 
 	return
+}
+
+func getDelivery(w http.ResponseWriter, req *http.Request) (delivery []Delivery, err error) {
+	var body []byte
+	body, err = ioutil.ReadAll(req.Body)
+	if err != nil {
+		message := fmt.Sprintf("Error reading request body: %v", err)
+		logMessage(message)
+		notify(w, "Error reading request body", http.StatusInternalServerError)
+		return
+	}
+	logMessage(fmt.Sprintf("REQUEST BODY: %s", body))
+	defer req.Body.Close()
+
+	if err = json.Unmarshal(body, &delivery); err != nil {
+		message := fmt.Sprintf("Unmarshal error %s body %s", err, string(body))
+		logMessage(message)
+		fmt.Println(string(body), "\nUnmarshal error:", err)
+		notify(w, fmt.Sprintf("%v", err), http.StatusInternalServerError)
+		return
+	}
+
+	return
+}
+
+func deliveryDocProcessing(delivery Delivery, w http.ResponseWriter) {
+
 }
 
 func eventProcessing(body []byte, event Event, w http.ResponseWriter) {
@@ -497,48 +608,6 @@ func substr(s string, pos, length int) (result string) {
 	}
 	return
 }
-
-//func reverse(s string) string {
-//	chars := []rune(s)
-//	for i, j := 0, len(chars)-1; i < j; i, j = i+1, j-1 {
-//		chars[i], chars[j] = chars[j], chars[i]
-//	}
-//	return string(chars)
-//}
-
-//func convertDirection4Priority(src string, flag bool) string {
-//	if flag {
-//		src = strings.Replace(src, "\"", "", -1)
-//	}
-//	src = strings.Replace(src, "[", "", -1)
-//	src = strings.Replace(src, "]", "", -1)
-//	src = strings.Replace(src, "'", "", -1)
-//	src = strings.Replace(src, "(", "", -1)
-//	src = strings.Replace(src, ")", "", -1)
-//	if len(src) <= 1 || !strings.Contains("אבגדהוזחטיכלמנסעפצקרשתםןץףך", src[:1]) {
-//		return src
-//	}
-//	var target []string
-//	arr := strings.Fields(src)
-//	for i := len(arr) - 1; i >= 0; i-- {
-//		e := arr[i]
-//		r := []rune(e)[0]
-//		if strings.ContainsRune("אבגדהוזחטיכלמנסעפצקרשתםןץףך", r) { // Do not convert words without Hebrew chars
-//			//if r == '(' || r == ')' {
-//			//	e = strings.Replace(e, "(", "左", -1)
-//			//	e = strings.Replace(e, ")", "权", -1)
-//			//	e = reverse(e)
-//			//	e = strings.Replace(e, "权", ")", -1)
-//			//	e = strings.Replace(e, "左", "(", -1)
-//			//} else {
-//			e = reverse(e)
-//			//}
-//		}
-//		target = append(target, e)
-//	}
-//
-//	return strings.Join(target, " ")
-//}
 
 func registerRequest(event Event) {
 	is64 := 0
