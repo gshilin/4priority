@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"encoding/xml"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -121,55 +120,39 @@ type PriceSet struct {
 	} `json:"presentment_money"`
 }
 
-type ShippingLine struct {
-	ID                            int      `json:"id"`
-	CarrierIdentifier             string   `json:"carrier_identifier"`
-	Code                          string   `json:"code"`
-	DeliveryCategory              *string  `json:"delivery_category,omitempty"`
-	DiscountedPrice               string   `json:"discounted_price"`
-	DiscountedPriceSet            PriceSet `json:"discounted_price_set"`
-	Phone                         *string  `json:"phone,omitempty"`
-	Price                         string   `json:"price"`
-	PriceSet                      PriceSet `json:"price_set"`
-	RequestedFulfillmentServiceId *string  `json:"requested_fulfillment_service_id,omitempty"`
-	Source                        string   `json:"source"`
-	Title                         string   `json:"title"`
-	TaxLines                      []string `json:"tax_lines,omitempty"`
-	DiscountAllocations           []string `json:"discount_allocations,omitempty"`
-}
 type Address struct {
-	FirstName    string  `json:"first_name"`
-	LastName     string  `json:"last_name"`
-	Name         string  `json:"name"`
-	Address1     string  `json:"address1"`
-	Address2     string  `json:"address2"`
-	Phone        string  `json:"phone"`
-	City         string  `json:"city"`
-	ZIP          string  `json:"zip"`
+	FirstName    *string `json:"first_name"`
+	Address1     *string `json:"address1"`
+	Phone        *string `json:"phone"`
+	City         *string `json:"city"`
+	ZIP          *string `json:"zip"`
 	Province     *string `json:"province,omitempty"`
-	ProvinceCode *string `json:"province_code,omitempty"`
-	Country      string  `json:"country"`
-	CountryCode  string  `json:"country_code"`
+	Country      *string `json:"country"`
+	LastName     *string `json:"last_name"`
+	Address2     *string `json:"address2"`
 	Company      *string `json:"company,omitempty"`
 	Latitude     *string `json:"latitude,omitempty"`
 	Longitude    *string `json:"longitude,omitempty"`
+	Name         *string `json:"name"`
+	CountryCode  *string `json:"country_code"`
+	ProvinceCode *string `json:"province_code,omitempty"`
 }
-type DeliveryObject struct {
-	SKU                 string         `json:"sku"`
-	Note                string         `json:"note"`
-	Phone               *string        `json:"phone,omitempty"`
-	Price               string         `json:"price"`
-	Title               string         `json:"title"`
-	Vendor              string         `json:"vendor"`
-	Quantity            int            `json:"quantity"`
-	TotalPrice          string         `json:"total_price"`
-	OrderNumber         int            `json:"order_number"`
-	ContactEmail        string         `json:"contact_email"`
-	VariantTitle        string         `json:"variant_title"`
-	ShippingLines       []ShippingLine `json:"shipping_lines"`
-	BillingAddress      Address        `json:"billing_address"`
-	TotalDiscounts      string         `json:"total_discounts"`
-	ShippingAddress     *string        `json:"shipping_address,omitempty"`
+type LineItem struct {
+	SKU                 *string `json:"sku"`
+	Name                *string `json:"name"`
+	Note                *string `json:"note"`
+	Email               *string `json:"email"`
+	Phone               *string `json:"phone,omitempty"`
+	Price               *string `json:"price"`
+	Title               *string `json:"title"`
+	Number              *int    `json:"number"`
+	Quantity            *int    `json:"quantity"`
+	TotalPrice          *string `json:"total_price"`
+	VariantTitle        *string `json:"variant_title"`
+	TotalDiscount       *string `json:"total_discount"`
+	BillingAddress      Address `json:"billing_address"`
+	TotalDiscounts      *string `json:"total_discounts"`
+	ShippingAddress     *string `json:"shipping_address,omitempty"`
 	DiscountAllocations []struct {
 		Amount                   string   `json:"amount"`
 		AmountSet                PriceSet `json:"amount_set"`
@@ -177,7 +160,16 @@ type DeliveryObject struct {
 	} `json:"discount_allocations"`
 }
 type Delivery struct {
-	Object []DeliveryObject `json:"object"`
+	City          *string `json:"City"`
+	Phone         *string `json:"Phone"`
+	ZipCode       *string `json:"ZipCode"`
+	Address1      *string `json:"Address 1"`
+	Address2      *string `json:"Address 2"`
+	OrderNotes    *string `json:"OrderNotes"`
+	OrderNumber   *string `json:"OrderNumber"`
+	CustomerName  *string `json:"Customer Name"`
+	NumberOfItems *string `json:"Number Of Items"`
+	LineItems     string  `json:"Line Items"`
 }
 
 var (
@@ -307,9 +299,9 @@ func getTransaction(event Event, body []byte, w http.ResponseWriter) (*GetTransa
 	err = json.Unmarshal(bodyBytes, &resp)
 	if err != nil {
 		if err != nil {
-			msg := fmt.Sprintf("POST RESPONSE Unmarshal Error %v %s", err, string(bodyBytes))
+			msg := fmt.Sprintf("POST RESPONSE Unmarshal Error 1 %v %s", err, string(bodyBytes))
 			logMessage(msg)
-			txt := fmt.Sprintf("Unmarshal Error: %v: %s", err, request.Approval)
+			txt := fmt.Sprintf("Unmarshal Error 1: %v: %s", err, request.Approval)
 			notify(w, txt, http.StatusInternalServerError)
 			return nil, err
 		}
@@ -320,16 +312,16 @@ func getTransaction(event Event, body []byte, w http.ResponseWriter) (*GetTransa
 
 func createDeliveryDoc(w http.ResponseWriter, req *http.Request) {
 	logMessage("-----> createDeliveryDoc")
-	delivery, err := getDelivery(w, req)
+	lineItems, err := getDelivery(w, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusOK)
 		return
 	}
-	if len(delivery) != 1 {
-		http.Error(w, fmt.Errorf("delivery JSON must have exactly one element").Error(), http.StatusOK)
+	if len(lineItems) != 1 {
+		http.Error(w, fmt.Errorf("lineItems JSON must have exactly one element").Error(), http.StatusOK)
 		return
 	}
-	deliveryDocProcessing(delivery[0], w)
+	deliveryDocProcessing(lineItems, w)
 }
 
 func processEventShopify(w http.ResponseWriter, req *http.Request) {
@@ -350,7 +342,7 @@ func processEventShopify(w http.ResponseWriter, req *http.Request) {
 	event.CardNum = trans.CardNum
 	event.CardExp = trans.CardExp
 	event.Reference = trans.ParamX
-	eventProcessing(body, event, w)
+	eventProcessing(body, event, w, true)
 }
 
 func processEvent(w http.ResponseWriter, req *http.Request) {
@@ -359,7 +351,7 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusOK)
 		return
 	}
-	eventProcessing(body, event, w)
+	eventProcessing(body, event, w, false)
 }
 
 func getEvent(w http.ResponseWriter, req *http.Request) (body []byte, event Event, err error) {
@@ -384,7 +376,7 @@ func getEvent(w http.ResponseWriter, req *http.Request) (body []byte, event Even
 	return
 }
 
-func getDelivery(w http.ResponseWriter, req *http.Request) (delivery []Delivery, err error) {
+func getDelivery(w http.ResponseWriter, req *http.Request) (lineItems []LineItem, err error) {
 	var body []byte
 	body, err = ioutil.ReadAll(req.Body)
 	if err != nil {
@@ -396,10 +388,11 @@ func getDelivery(w http.ResponseWriter, req *http.Request) (delivery []Delivery,
 	logMessage(fmt.Sprintf("REQUEST BODY: %s", body))
 	defer req.Body.Close()
 
+	var delivery Delivery
 	if err = json.Unmarshal(body, &delivery); err != nil {
-		message := fmt.Sprintf("Unmarshal error %s body %s", err, string(body))
+		message := fmt.Sprintf("Unmarshal error %s body %s", err, body)
 		logMessage(message)
-		fmt.Println(string(body), "\nUnmarshal error:", err)
+		fmt.Println(body, "\nUnmarshal error:", err)
 		notify(w, fmt.Sprintf("%v", err), http.StatusInternalServerError)
 		return
 	}
@@ -407,11 +400,13 @@ func getDelivery(w http.ResponseWriter, req *http.Request) (delivery []Delivery,
 	return
 }
 
-func deliveryDocProcessing(delivery Delivery, w http.ResponseWriter) {
+func deliveryDocProcessing(lineItems []LineItem, w http.ResponseWriter) {
+	message := fmt.Sprintf("{\"error\":false,\"message\":\"Handled delivery: %#v\"}", lineItems)
 
+	http.Error(w, message, http.StatusOK)
 }
 
-func eventProcessing(body []byte, event Event, w http.ResponseWriter) {
+func eventProcessing(body []byte, event Event, w http.ResponseWriter, addRef bool) {
 	registerRequest(event)
 	switch event.Organization {
 	case "ben2":
@@ -455,35 +450,39 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter) {
 		t = t.In(jerusalemTZ)
 	}
 	createdAt := t.Format("02/01/06 15:04")
-	var convert = func(str string, flag bool) string {
-		return str
+	if event.Email == "" {
+		event.Email = "nomail@kab.co.il"
 	}
-
 	var request = Request{
-		UserName:     substr(convert(strings.TrimSpace(event.UserName), true), 0, 48),
+		UserName:     substr(strings.TrimSpace(event.UserName), 0, 48),
 		Participants: fmt.Sprintf("%d", event.Participants),
 		Income:       strings.TrimSpace(event.Income),
-		Description:  substr(convert(strings.TrimSpace(event.Description), true), 0, 120),
 		CardType:     event.CardType,
 		CardNum:      event.CardNum,
 		CardExp:      event.CardExp,
 		Amount:       event.Amount,
-		Currency:     convert(event.Currency, false),
+		Currency:     event.Currency,
 		Installments: fmt.Sprintf("%02d", event.Installments+7),
 		FirstPay:     event.FirstPay,
 		Token:        strings.TrimSpace(event.Token),
 		Approval:     strings.TrimSpace(event.Approval),
 		Is46:         vat,
 		Email:        substr(strings.TrimSpace(event.Email), 0, 40),
-		Address:      substr(convert(strings.TrimSpace(event.Address), true), 0, 12),
-		City:         substr(convert(strings.TrimSpace(event.City), true), 0, 22),
-		Country:      substr(convert(strings.TrimSpace(event.Country), true), 0, 12),
-		Phone:        substr(convert(strings.TrimSpace(event.Phone), true), 0, 16),
+		Address:      substr(strings.TrimSpace(event.Address), 0, 12),
+		City:         substr(strings.TrimSpace(event.City), 0, 22),
+		Country:      substr(strings.TrimSpace(event.Country), 0, 12),
+		Phone:        substr(strings.TrimSpace(event.Phone), 0, 16),
 		Language:     event.Language,
 		Monthly:      monthly,
 		CreatedAt:    createdAt,
 		Price:        event.Amount,
 		Reference:    event.Reference,
+	}
+	if addRef {
+		request.Description = event.Reference + " " + substr(strings.TrimSpace(event.Description), 0, 120)
+		request.Reference = "sh-" + request.Approval
+	} else {
+		request.Description = substr(strings.TrimSpace(event.Description), 0, 120)
 	}
 	params, _ := json.Marshal(request)
 	message := fmt.Sprintf("POST: %s", params)
@@ -528,46 +527,42 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter) {
 		Line int `json:"QAMO_LINE,omitempty"`
 	}
 	err = json.Unmarshal(bodyBytes, &resp)
-	if err != nil {
-		// ERROR
-		//<FORM
-		//  TYPE="QAMO_LOADINTENET">
-		//  <InterfaceErrors>
-		//    <text>.missing מספר בפלאקארד</text>
-		//  </InterfaceErrors>
-		//</FORM>
-		type InterfaceErrors struct {
-			XMLName xml.Name `xml:"InterfaceErrors"`
-			Message string   `xml:"text"`
-		}
-		type Form struct {
-			XMLName xml.Name        `xml:"FORM"`
-			Error   InterfaceErrors `xml:"InterfaceErrors"`
-		}
-		var xmlMessage Form
-		err = xml.Unmarshal(bodyBytes, &xmlMessage)
-		if err != nil {
-			msg := fmt.Sprintf("POST RESPONSE Unmarshal Error %v %s", err, string(bodyBytes))
-			logMessage(msg)
-			txt := fmt.Sprintf("Unmarshal Error: %v: %s", err, request.Reference)
-			notify(w, txt, http.StatusInternalServerError)
-			return
-		}
-		msg := fmt.Sprintf("Error %s", xmlMessage.Error.Message+": "+request.Reference)
-		logMessage(msg)
-		notify(w, xmlMessage.Error.Message+": "+request.Reference, http.StatusInternalServerError)
-		return
-	}
-	if resp.Error.Message != "" {
+	if err == nil && resp.Error.Message != "" {
 		// GENERIC ERROR
 		//{
 		//	"error":{
 		//	"code":"","message":"An error has occurred."
 		//  }
 		//}
-		msg := fmt.Sprintf("Error %s", ": "+request.Reference)
+		msg := fmt.Sprintf("Error: %s ref(%s)", resp.Error.Message, request.Reference)
 		logMessage(msg)
 		notify(w, resp.Error.Message+": "+request.Reference, http.StatusBadRequest)
+		return
+	}
+	if err != nil || resp.Line == 0 {
+		// ERROR
+		// {"?xml":{"@version":"1.0","@encoding":"utf-8","@standalone":"yes"},"FORM":{"@TYPE":"QAMO_LOADINTENET","InterfaceErrors":{"@XmlFormat":"0","text":"שורה 1- הכנסה לקובץ נכשלה"}}}
+		type InterfaceErrors struct {
+			Message string `json:"text"`
+		}
+		type Form struct {
+			Error   InterfaceErrors `json:"InterfaceErrors"`
+		}
+		type Message struct {
+			Form Form `json:"FORM"`
+		}
+		var message Message
+		err = json.Unmarshal(bodyBytes, &message)
+		if err != nil {
+			msg := fmt.Sprintf("POST RESPONSE Unmarshal Error 2 %v %s", err, string(bodyBytes))
+			logMessage(msg)
+			txt := fmt.Sprintf("Unmarshal Error 2: %v: %s", err, request.Reference)
+			notify(w, txt, http.StatusInternalServerError)
+			return
+		}
+		msg := fmt.Sprintf("Error: %s ref(%s)", message.Form.Error.Message, request.Reference)
+		logMessage(msg)
+		notify(w, message.Form.Error.Message+": "+request.Reference, http.StatusInternalServerError)
 		return
 	}
 
