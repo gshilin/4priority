@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -79,6 +80,7 @@ type Request struct {
 	CreatedAt    string  `json:"QAMM_UDATE,omitempty"`
 	Price        float64 `json:"QAMO_PRICE,omitempty"`
 	Reference    string  `json:"QAMT_REFRENCE,omitempty"`
+	Reference16  string  `json:"PELECARD16,omitempty"`
 }
 type GetTransactionRequest struct {
 	Organization string `json:"organization"`
@@ -406,7 +408,7 @@ func deliveryDocProcessing(lineItems []LineItem, w http.ResponseWriter) {
 	http.Error(w, message, http.StatusOK)
 }
 
-func eventProcessing(body []byte, event Event, w http.ResponseWriter, addRef bool) {
+func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 bool) {
 	registerRequest(event)
 	switch event.Organization {
 	case "ben2":
@@ -425,6 +427,7 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, addRef boo
 	if event.Is46 {
 		vat = "Y"
 	}
+	// TODO This decision should be based on ...
 	var monthly string
 	if event.Token != "" {
 		monthly = "Y"
@@ -457,6 +460,7 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, addRef boo
 		UserName:     substr(strings.TrimSpace(event.UserName), 0, 48),
 		Participants: fmt.Sprintf("%d", event.Participants),
 		Income:       strings.TrimSpace(event.Income),
+		Description:  substr(strings.TrimSpace(event.Description), 0, 120),
 		CardType:     event.CardType,
 		CardNum:      event.CardNum,
 		CardExp:      event.CardExp,
@@ -478,11 +482,8 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, addRef boo
 		Price:        event.Amount,
 		Reference:    event.Reference,
 	}
-	if addRef {
-		request.Description = event.Reference + " " + substr(strings.TrimSpace(event.Description), 0, 120)
-		request.Reference = "sh-" + request.Approval
-	} else {
-		request.Description = substr(strings.TrimSpace(event.Description), 0, 120)
+	if fill16 {
+		request.Reference16 = event.Reference
 	}
 	params, _ := json.Marshal(request)
 	message := fmt.Sprintf("POST: %s", params)
@@ -543,16 +544,15 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, addRef boo
 		// ERROR
 		// {"?xml":{"@version":"1.0","@encoding":"utf-8","@standalone":"yes"},"FORM":{"@TYPE":"QAMO_LOADINTENET","InterfaceErrors":{"@XmlFormat":"0","text":"שורה 1- הכנסה לקובץ נכשלה"}}}
 		type InterfaceErrors struct {
-			Message string `json:"text"`
+			XMLName xml.Name `xml:"InterfaceErrors:`
+			Message string `xml:"text"`
 		}
 		type Form struct {
-			Error   InterfaceErrors `json:"InterfaceErrors"`
+			XMLName xml.Name `xml:"FORM:`
+			Error   InterfaceErrors `xml:"InterfaceErrors"`
 		}
-		type Message struct {
-			Form Form `json:"FORM"`
-		}
-		var message Message
-		err = json.Unmarshal(bodyBytes, &message)
+		var xmlMessage Form
+		err = xml.Unmarshal(bodyBytes, &xmlMessage)
 		if err != nil {
 			msg := fmt.Sprintf("POST RESPONSE Unmarshal Error 2 %v %s", err, string(bodyBytes))
 			logMessage(msg)
@@ -560,9 +560,9 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, addRef boo
 			notify(w, txt, http.StatusInternalServerError)
 			return
 		}
-		msg := fmt.Sprintf("Error: %s ref(%s)", message.Form.Error.Message, request.Reference)
+		msg := fmt.Sprintf("Error: %s ref(%s)", xmlMessage.Error.Message, request.Reference)
 		logMessage(msg)
-		notify(w, message.Form.Error.Message+": "+request.Reference, http.StatusInternalServerError)
+		notify(w, xmlMessage.Error.Message+": "+request.Reference, http.StatusInternalServerError)
 		return
 	}
 
