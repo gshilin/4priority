@@ -54,6 +54,7 @@ type Event struct {
 	IsVisual      bool    `json:"is_visual"`
 	IsUTC         int64   `json:"is_utc,omitempty"`
 	TransactionId string  `json:"transaction_id,omitempty"`
+	IsRegular     int64   `json:"is_regular,omitempty"`
 }
 type Request struct {
 	UserName     string  `json:"QAMO_CUSTDES,omitempty"`
@@ -427,12 +428,9 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 boo
 	if event.Is46 {
 		vat = "Y"
 	}
-	// TODO This decision should be based on ...
-	var monthly string
-	if event.Token != "" {
+	monthly := "N"
+	if event.IsRegular == 0 && event.Token != "" {
 		monthly = "Y"
-	} else {
-		monthly = "N"
 	}
 	t, err := time.Parse("2006-01-02 15:04:05", event.CreatedAt)
 	if err != nil {
@@ -545,10 +543,10 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 boo
 		// {"?xml":{"@version":"1.0","@encoding":"utf-8","@standalone":"yes"},"FORM":{"@TYPE":"QAMO_LOADINTENET","InterfaceErrors":{"@XmlFormat":"0","text":"שורה 1- הכנסה לקובץ נכשלה"}}}
 		type InterfaceErrors struct {
 			XMLName xml.Name `xml:"InterfaceErrors:`
-			Message string `xml:"text"`
+			Message string   `xml:"text"`
 		}
 		type Form struct {
-			XMLName xml.Name `xml:"FORM:`
+			XMLName xml.Name        `xml:"FORM:`
 			Error   InterfaceErrors `xml:"InterfaceErrors"`
 		}
 		var xmlMessage Form
