@@ -23,6 +23,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/joho/godotenv/autoload"
+	"golang.org/x/net/html"
 )
 
 type Event struct {
@@ -55,6 +56,7 @@ type Event struct {
 	IsUTC         int64   `json:"is_utc,omitempty"`
 	TransactionId string  `json:"transaction_id,omitempty"`
 	IsRegular     int64   `json:"is_regular,omitempty"`
+	OrderId       string  `json:"order_id,omitempty"`
 }
 type Request struct {
 	UserName     string  `json:"QAMO_CUSTDES,omitempty"`
@@ -81,7 +83,7 @@ type Request struct {
 	CreatedAt    string  `json:"QAMM_UDATE,omitempty"`
 	Price        float64 `json:"QAMO_PRICE,omitempty"`
 	Reference    string  `json:"QAMT_REFRENCE,omitempty"`
-	Reference16  string  `json:"PELECARD16,omitempty"`
+	Reference16  string  `json:"PELCARD16,omitempty"`
 }
 type GetTransactionRequest struct {
 	Organization string `json:"organization"`
@@ -298,6 +300,14 @@ func getTransaction(event Event, body []byte, w http.ResponseWriter) (*GetTransa
 		return nil, err
 	}
 	logMessage(fmt.Sprintf("====> GetTransaction POST RESPONSE ====> %v", string(bodyBytes)))
+	errMsg := parseHTML4Error(string(bodyBytes))
+	if errMsg != "" {
+		msg := fmt.Sprintf("POST RESPONSE HTML Error %s", errMsg)
+		logMessage(msg)
+		txt := fmt.Sprintf("Unmarshal Error 1: %s: %s", errMsg, request.Approval)
+		notify(w, txt, http.StatusInternalServerError)
+		return nil, fmt.Errorf(txt)
+	}
 	var resp GetTransactionResponse
 	err = json.Unmarshal(bodyBytes, &resp)
 	if err != nil {
@@ -311,6 +321,38 @@ func getTransaction(event Event, body []byte, w http.ResponseWriter) (*GetTransa
 	}
 
 	return &resp, nil
+}
+
+func parseHTML4Error(text string) string {
+	msg := fmt.Sprintf("PARSING: %s", text)
+	logMessage(msg)
+
+	// ERROR
+	//  <html><body>
+	// 		<h1 style='color: red;'>Error <code>GetTransactionData unable to find transaction around 2022-08-01 21:39:09 with approval 0082853</code>
+	//		</h1>
+	//		<br>
+	//		<pre></pre>
+	//  </body></html>
+	var isCode bool
+
+	tkn := html.NewTokenizer(strings.NewReader(text))
+	for {
+		tt := tkn.Next()
+		switch {
+		case tt == html.ErrorToken:
+			return ""
+		case tt == html.StartTagToken:
+			t := tkn.Token()
+			isCode = t.Data == "code"
+		case tt == html.TextToken:
+			t := tkn.Token()
+			if isCode {
+				return t.Data
+			}
+			isCode = false
+		}
+	}
 }
 
 func createDeliveryDoc(w http.ResponseWriter, req *http.Request) {
@@ -478,10 +520,11 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 boo
 		Monthly:      monthly,
 		CreatedAt:    createdAt,
 		Price:        event.Amount,
-		Reference:    event.Reference,
+		Reference:    substr(strings.TrimSpace(event.Reference), 0, 12),
 	}
 	if fill16 {
 		request.Reference16 = event.Reference
+		request.Reference = event.OrderId
 	}
 	params, _ := json.Marshal(request)
 	message := fmt.Sprintf("POST: %s", params)
@@ -542,11 +585,11 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 boo
 		// ERROR
 		// {"?xml":{"@version":"1.0","@encoding":"utf-8","@standalone":"yes"},"FORM":{"@TYPE":"QAMO_LOADINTENET","InterfaceErrors":{"@XmlFormat":"0","text":"שורה 1- הכנסה לקובץ נכשלה"}}}
 		type InterfaceErrors struct {
-			XMLName xml.Name `xml:"InterfaceErrors:`
+			XMLName xml.Name `xml:"InterfaceErrors"`
 			Message string   `xml:"text"`
 		}
 		type Form struct {
-			XMLName xml.Name        `xml:"FORM:`
+			XMLName xml.Name        `xml:"FORM"`
 			Error   InterfaceErrors `xml:"InterfaceErrors"`
 		}
 		var xmlMessage Form
