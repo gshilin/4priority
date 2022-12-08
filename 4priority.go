@@ -453,10 +453,14 @@ func deliveryDocProcessing(lineItems []LineItem, w http.ResponseWriter) {
 
 func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 bool) {
 	registerRequest(event)
+	income := strings.TrimSpace(event.Income)
 	switch event.Organization {
 	case "ben2":
 	case "arvut2":
 	case "meshp18":
+		// take the first part of <income>-GSH-2022
+		fields := strings.SplitN(income, "-", 2)
+		income = fields[0]
 	default:
 		message := map[string]interface{}{"error": true, "message": fmt.Sprintf("Unknown organization: %s", event.Organization)}
 		m, _ := json.Marshal(message)
@@ -499,7 +503,7 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 boo
 	var request = Request{
 		UserName:     substr(strings.TrimSpace(event.UserName), 0, 48),
 		Participants: fmt.Sprintf("%d", event.Participants),
-		Income:       strings.TrimSpace(event.Income),
+		Income:       income,
 		Description:  substr(strings.TrimSpace(event.Description), 0, 120),
 		CardType:     event.CardType,
 		CardNum:      event.CardNum,
