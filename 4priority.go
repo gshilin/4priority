@@ -1,8 +1,7 @@
 // Wait for messages from services and submit them to Priority
 // https://prioritysoftware.github.io/restapi
 
-// go build 4priority.go && strip 4priority && upx -9 4priority && cp 4priority /media/sf_projects/bbpriority/
-
+// CGO_ENABLED=0 go build 4priority.go && strip 4priority && upx -9 4priority && cp 4priority /media/sf_D_DRIVE/projects/bbpriority/
 package main
 
 import (
@@ -11,7 +10,7 @@ import (
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -290,7 +289,7 @@ func getTransaction(event Event, body []byte, w http.ResponseWriter) (*GetTransa
 		return nil, err
 	}
 	defer response.Body.Close()
-	bodyBytes, _ := ioutil.ReadAll(response.Body)
+	bodyBytes, _ := io.ReadAll(response.Body)
 	if len(bodyBytes) == 0 {
 		logMessage("POST " + url)
 		msg := fmt.Sprintf("POST RESPONSE (zero length answer)\n\tRequest %#v\nResponse %#v", req, response)
@@ -400,7 +399,7 @@ func processEvent(w http.ResponseWriter, req *http.Request) {
 }
 
 func getEvent(w http.ResponseWriter, req *http.Request) (body []byte, event Event, err error) {
-	body, err = ioutil.ReadAll(req.Body)
+	body, err = io.ReadAll(req.Body)
 	if err != nil {
 		message := fmt.Sprintf("Error reading request body: %v", err)
 		logMessage(message)
@@ -423,7 +422,7 @@ func getEvent(w http.ResponseWriter, req *http.Request) (body []byte, event Even
 
 func getDelivery(w http.ResponseWriter, req *http.Request) (lineItems []LineItem, err error) {
 	var body []byte
-	body, err = ioutil.ReadAll(req.Body)
+	body, err = io.ReadAll(req.Body)
 	if err != nil {
 		message := fmt.Sprintf("Error reading request body: %v", err)
 		logMessage(message)
@@ -453,6 +452,14 @@ func deliveryDocProcessing(lineItems []LineItem, w http.ResponseWriter) {
 
 func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 bool) {
 	registerRequest(event)
+	if event.Installments == 0 && event.FirstPay == 0 {
+		fmt.Println("event.Installments == 0 && event.FirstPay == 0")
+		message := fmt.Sprintf("{\"error\":false,\"message\":\"Inserted id: 123123, reference: %s\"}", event.Reference)
+		logMessage(message)
+		http.Error(w, message, http.StatusOK)
+		return
+	}
+
 	income := strings.TrimSpace(event.Income)
 	switch event.Organization {
 	case "ben2":
@@ -555,7 +562,7 @@ func eventProcessing(body []byte, event Event, w http.ResponseWriter, fill16 boo
 		return
 	}
 	defer response.Body.Close()
-	bodyBytes, _ := ioutil.ReadAll(response.Body)
+	bodyBytes, _ := io.ReadAll(response.Body)
 	if len(bodyBytes) == 0 {
 		logMessage("POST " + url)
 		msg := fmt.Sprintf("POST RESPONSE (zero length answer)\n\tRequest %#v\nResponse %#v", req, response)
